@@ -1,0 +1,74 @@
+{
+  "success": true,
+  "build": {
+    "name": "Bárbaro Exorcista (ejemplo)",
+    "class": "Barbarian",
+    "dualClass": null,
+    "level": 4,
+    "ancestry": "Orc",
+    "heritage": "Hold-Scarred Orc",
+    "background": "Acolyte",
+    "alignment": "N",
+    "gender": "Not set",
+    "age": "Not set",
+    "deity": "Not set",
+    "size": 2,
+    "sizeName": "Medium",
+    "keyability": "str",
+    "languages": ["Common", "Orcish"],
+    "rituals": [],
+    "resistances": [],
+    "inventorMods": [],
+    "attributes": {
+      "ancestryhp": 10,
+      "classhp": 12,
+      "bonushp": 2,
+      "bonushpPerLevel": 0,
+      "speed": 25,
+      "speedBonus": 5
+    },
+    "abilities": { "str": 18, "dex": 12, "con": 12, "int": 10, "wis": 16, "cha": 10 },
+    "proficiencies": {
+      "classDC": 2, "perception": 4, "fortitude": 4, "reflex": 2, "will": 4,
+      "heavy": 0, "medium": 2, "light": 2, "unarmored": 2,
+      "advanced": 0, "martial": 2, "simple": 2, "unarmed": 2,
+      "castingArcane": 0, "castingDivine": 0, "castingOccult": 0, "castingPrimal": 0,
+      "acrobatics": 0, "arcana": 0, "athletics": 2, "crafting": 0, "deception": 0,
+      "diplomacy": 0, "intimidation": 0, "medicine": 4, "nature": 0, "occultism": 0,
+      "performance": 0, "religion": 2, "society": 0, "stealth": 0, "survival": 0, "thievery": 0
+    },
+    "mods": { "Athletics": { "Item Bonus": 1 } },
+    "feats": [
+      ["Sudden Charge", null, "Class Feat", 1],
+      ["Orc Ferocity", null, "Ancestry Feat", 1]
+    ],
+    "specials": ["Rage", "Quick-Tempered", "Darkvision", "Spirit Instinct"],
+    "lores": [["Scribing", 2]],
+    "equipmentContainers": {},
+    "equipment": [["Backpack", 1, "Invested"], ["Healer's Toolkit", 1]],
+    "specificProficiencies": { "trained": [], "expert": [], "master": [], "legendary": [] },
+    "weapons": [
+      {
+        "name": "Scythe", "qty": 1, "prof": "martial", "die": "d10", "pot": 1, "str": "striking",
+        "mat": null, "display": "+1 Striking Scythe", "runes": [], "damageType": "S",
+        "attack": 11, "damageBonus": 4, "extraDamage": [], "increasedDice": false, "isInventor": false
+      },
+      {
+        "name": "Dagger", "qty": 1, "prof": "simple", "die": "d4", "pot": 0, "str": "",
+        "mat": null, "display": "Dagger", "runes": [], "damageType": "P",
+        "attack": 10, "damageBonus": 4, "extraDamage": [], "increasedDice": false, "isInventor": false
+      }
+    ],
+    "money": { "cp": 0, "sp": 5, "gp": 12, "pp": 0 },
+    "armor": [
+      { "name": "Hide Armor", "qty": 1, "prof": "medium", "pot": 0, "res": "", "mat": null, "display": "Hide Armor", "worn": true, "runes": [] }
+    ],
+    "spellCasters": [],
+    "focusPoints": 0,
+    "focus": {},
+    "formula": [],
+    "acTotal": { "acProfBonus": 6, "acAbilityBonus": 1, "acItemBonus": 4, "acTotal": 21, "shieldBonus": null },
+    "pets": [],
+    "familiars": []
+  }
+}

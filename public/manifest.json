@@ -1,0 +1,17 @@
+{
+  "name": "PF2e Hojas de Personaje",
+  "version": "1.0.0",
+  "manifest_version": 1,
+  "author": "Nacho",
+  "description": "Importa hojas de Pathbuilder 2e, tira dados 3D con sus bonos y sincroniza HP/CA con los tokens.",
+  "icon": "/icons/d20.svg",
+  "homepage_url": "https://github.com/",
+  "background_url": "/background.html",
+  "action": {
+    "title": "PF2e Hoja",
+    "icon": "/icons/d20.svg",
+    "popover": "/index.html",
+    "width": 420,
+    "height": 780
+  }
+}
