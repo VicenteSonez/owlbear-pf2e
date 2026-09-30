@@ -377,3 +377,16 @@ input { font: inherit; color: var(--text); }
 .te-small { font-size: 11px; }
 .te-check { display: flex; align-items: center; gap: 3px; color: var(--muted); flex: 1.4; }
 body.embed { background: transparent; }
+
+/* El editor del menú contextual es estrecho: que nada fuerce scroll horizontal */
+body.embed { overflow: hidden; }
+.te-row > * { min-width: 0; }
+.te-amount { width: 0; min-width: 0; }
+.te-field { min-width: 0; }
+
+/* Pantallas bajas: toda la hoja hace scroll en vez de aplastar las pestañas */
+@media (max-height: 720px) {
+  .sheet { overflow-y: auto; }
+  .tabs { flex: none; }
+  .tab-body { overflow: visible; }
+}
