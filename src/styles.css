@@ -1271,3 +1271,42 @@ button.pet-stat:hover { border-color: var(--accent); }
 .pet-attack.edit input { min-width: 0; flex: 1; background: #101216; border: 1px solid var(--line); border-radius: 4px; padding: 3px 5px; }
 .pet-attack.edit input.sm { flex: 0 0 42px; text-align: center; }
 .pet-attack.edit input.md { flex: 0 0 72px; }
+
+/* ---------- Efectos de ataque en el mapa ---------- */
+.fx-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 8px;
+  margin-bottom: 8px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.fx-row > div:first-child { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.fx-row b { font-size: 12px; }
+.fx-dir { display: grid; grid-template-columns: repeat(3, 20px); grid-template-rows: repeat(3, 20px); gap: 2px; flex-shrink: 0; }
+.fx-dir button {
+  padding: 0;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--muted);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+}
+.fx-dir button:hover { border-color: var(--accent); color: var(--text); }
+.fx-dir button.on { color: #fff; background: var(--accent-soft); border-color: var(--accent); }
+.fx-dir .fx-center { color: #4a4f5c; }
+.fx-dir .fx-center.on { color: #fff; background: #3a3f4c; border-color: var(--line); }
+.fx-dir.off button:not(.fx-center) { opacity: 0.4; }
+.fx-select {
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 1px 4px;
+  max-width: 130px;
+}

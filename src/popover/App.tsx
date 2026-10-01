@@ -19,6 +19,7 @@ import { NatFx } from "./NatFx";
 import { FlatChecks, type FlatRequest } from "./FlatChecks";
 import { GmView } from "./GmView";
 import type { Target } from "./EffectsPanel";
+import type { RollFx } from "../fx";
 import { CombatView } from "./CombatView";
 import { InitPanel, initFormula, type InitOption } from "./Initiative";
 import { useCombatActions } from "./useCombatActions";
@@ -47,6 +48,9 @@ export interface RollRequest {
   flat?: FlatRequest;
   // Por defecto la tirada es del personaje en pantalla
   charName?: string;
+  charId?: string;
+  // Efecto visual en el mapa (ataques)
+  fx?: RollFx;
 }
 
 interface Current {
@@ -376,6 +380,8 @@ export function App() {
           time: Date.now(),
           ...who,
           charName: req.charName ?? character?.name,
+          charId: req.charId ?? rollingFor,
+          fx: req.fx,
           label: req.label,
           formula: shownFormula,
           detail: out.detail,

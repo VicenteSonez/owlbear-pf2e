@@ -163,7 +163,7 @@ function PetCard(props: SideProps & { pet: Pet; index: number; onRoll: (r: RollR
 
   const rollStat = (label: string, mod: number, ctx: RollCtx) => {
     const a = checkAdjust(s?.cond, ctx);
-    onRoll({ label: `${name}: ${label}`, formula: `1d20${fmtMod(mod + a.total)}`, kind: "check", notes: modsText(a.applied) || undefined, charName: name });
+    onRoll({ label: `${name}: ${label}`, formula: `1d20${fmtMod(mod + a.total)}`, kind: "check", notes: modsText(a.applied) || undefined, charName: name, charId: id });
   };
   const rollAttack = (at: PetAttack, i: number) => {
     const a = checkAdjust(s?.cond, { kind: "attack", melee: true, finesse: false });
@@ -174,6 +174,7 @@ function PetCard(props: SideProps & { pet: Pet; index: number; onRoll: (r: RollR
       kind: "check",
       notes: modsText(a.applied) || undefined,
       charName: name,
+      charId: id,
     });
   };
   const attacks = stats.attacks ?? [];
@@ -296,14 +297,14 @@ function PetCard(props: SideProps & { pet: Pet; index: number; onRoll: (r: RollR
                 <button
                   className="btn"
                   disabled={!at.damage}
-                  onClick={() => onRoll({ label: `${name}: ${at.name || "Ataque"} (daño)`, formula: at.damage, kind: "damage", charName: name })}
+                  onClick={() => onRoll({ label: `${name}: ${at.name || "Ataque"} (daño)`, formula: at.damage, kind: "damage", charName: name, charId: id })}
                 >
                   Daño
                 </button>
                 <button
                   className="btn crit"
                   disabled={!at.damage}
-                  onClick={() => onRoll({ label: `${name}: ${at.name || "Ataque"} (crítico)`, formula: at.damage, kind: "damage", crit: true, charName: name })}
+                  onClick={() => onRoll({ label: `${name}: ${at.name || "Ataque"} (crítico)`, formula: at.damage, kind: "damage", crit: true, charName: name, charId: id })}
                 >
                   Crítico
                 </button>

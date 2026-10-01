@@ -5,6 +5,9 @@ import { extrasStore } from "../extras";
 import { watchForUpdates } from "../autoUpdate";
 import { live, needsSheetSync, seedState, syncSheet } from "../live";
 import { combatStore, npcKey, pcKey, type Combat } from "../combat";
+import { playAttack, playOnToken, resetFx } from "./fx";
+import type { FxKind } from "../fx";
+import type { PcState } from "../live";
 import { DEATH_DYING, activeConditionIcons, effectiveAc, effectiveMaxHp } from "../rules";
 import {
   CHANNEL_ROLL,
@@ -196,6 +199,7 @@ function setupRolls() {
     if (!entry) return;
     store.pushLog(roomId(), entry);
     addToast(entry);
+    playRollFx(entry);
   });
   // La ventana de tarjetas escribe aquí al cerrar una tarjeta o limpiar todas
   window.addEventListener("storage", (e) => {
@@ -440,6 +444,7 @@ async function buildOverlay(item: Item, v: TokenView): Promise<Item[]> {
 }
 
 async function syncOverlays(items: Item[]) {
+  detectNpcFx(items);
   lastItems = items;
   if (syncing) {
     pending = items;
@@ -551,8 +556,70 @@ function onCombatChange(c: Combat) {
   }
 }
 
+// ---------- Efectos visuales: se deducen de los cambios de estado, así todos ven lo mismo ----------
+
+const visibleToMe = (item: Item | undefined) => !!item && (item.visible || role === "GM");
+const pcToken = (charId: string) => lastItems.find((i) => tokenData(i)?.characterId === charId);
+
+function fx(kind: FxKind, item: Item | undefined) {
+  if (!visibleToMe(item)) return;
+  playOnToken(kind, item!.id).catch((err) => console.error("[PF2e] Error con un efecto", err));
+}
+
+// Ataques y conjuros: el efecto viaja con la tirada
+function playRollFx(entry: RollEntry) {
+  if (!entry.fx || !entry.charId) return;
+  const item = pcToken(entry.charId);
+  if (!visibleToMe(item)) return;
+  const play =
+    entry.fx.dir === undefined ? playOnToken(entry.fx.kind, item!.id) : playAttack(entry.fx.kind, item!.id, entry.fx.dir);
+  play.catch((err) => console.error("[PF2e] Error con un efecto", err));
+}
+
+interface VitalSnap {
+  hp: number;
+  temp: number;
+  dying: number;
+  shield: number;
+}
+let prevPc: Map<string, VitalSnap> | null = null;
+let prevNpc: Map<string, VitalSnap> | null = null;
+
+// Compara con lo anterior y lanza curación, daño, escudo golpeado o estrellas al caer moribundo
+function vitalsFx(prev: VitalSnap | undefined, next: VitalSnap, item: Item | undefined) {
+  if (!prev) return;
+  if (next.shield < prev.shield) fx("shield", item);
+  if (next.hp + next.temp < prev.hp + prev.temp) fx("damage", item);
+  else if (next.hp > prev.hp) fx("heal", item);
+  if (next.dying > prev.dying) fx("stars", item);
+}
+
+function detectPcFx(states: Record<string, PcState>) {
+  const next = new Map<string, VitalSnap>();
+  for (const s of Object.values(states)) {
+    const snap = { hp: s.hp, temp: s.temp, dying: s.dying, shield: s.shield?.hp ?? 0 };
+    next.set(s.id, snap);
+    if (prevPc && lastItems.length) vitalsFx(prevPc.get(s.id), snap, pcToken(s.id));
+  }
+  prevPc = next;
+}
+
+function detectNpcFx(items: Item[]) {
+  const next = new Map<string, VitalSnap>();
+  for (const item of items) {
+    const d = tokenData(item);
+    if (d?.kind !== "npc") continue;
+    const n = npcState(d);
+    const snap = { hp: n.hp, temp: n.temp, dying: 0, shield: 0 };
+    next.set(item.id, snap);
+    if (prevNpc) vitalsFx(prevNpc.get(item.id), snap, item);
+  }
+  prevNpc = next;
+}
+
 async function resetOverlays() {
   rendered.clear();
+  resetFx();
   ringSig = null;
   if (!(await OBR.scene.isReady())) return;
   const old = await OBR.scene.local.getItems((i) => i.id.startsWith(OVERLAY_PREFIX));
@@ -564,7 +631,8 @@ async function resetOverlays() {
 function setupOverlays() {
   OBR.scene.items.onChange((items) => syncOverlays(items));
   // El estado de los PJ vive en la sala: si cambia, se redibujan sus barras
-  live.subscribe(() => {
+  live.subscribe((states) => {
+    detectPcFx(states);
     if (lastItems.length) syncOverlays(lastItems);
   });
   // Se suscribe ya cargado, para no avisar del turno en curso al abrir la sala
@@ -576,6 +644,7 @@ function setupOverlays() {
     if (!ready) {
       rendered.clear();
       lastItems = [];
+      prevNpc = null;
       return;
     }
     await resetOverlays();

@@ -8,6 +8,8 @@ import type { RollRequest } from "./App";
 import { LogList } from "./LogList";
 import { ShieldCard } from "./ShieldCard";
 import { speedTitle } from "./Vitals";
+import { FxDir } from "./FxDir";
+import { ATTACK_FX, defaultWeaponFx, type AttackFx } from "../fx";
 
 type Tab = "attacks" | "skills" | "defense" | "spells" | "log";
 
@@ -53,6 +55,18 @@ export function SheetTabs({ character: c, state, canEdit, onRoll, onPatch, log, 
   }
 
   const weapons = c.weapons.map((w) => applyWeaponFlags(w, flags[weaponKey(w)]));
+  // Efectos de ataque en el mapa: dirección elegida y efecto de cada arma
+  const [fxPref, setFxPrefState] = useState(() => store.fxPref(c.id));
+  const [fxFor, setFxFor] = useState(c.id);
+  if (fxFor !== c.id) {
+    setFxFor(c.id);
+    setFxPrefState(store.fxPref(c.id));
+  }
+  const setFxPref = (p: { dir: number; on: boolean }) => {
+    setFxPrefState(p);
+    store.setFxPref(c.id, p);
+  };
+  const fxOf = (w: Weapon): AttackFx | "none" => flags[weaponKey(w)]?.fx ?? defaultWeaponFx(w);
   const setFlag = (w: Weapon, patch: WeaponFlags) => {
     const key = weaponKey(w);
     const next = { ...flags, [key]: { ...flags[key], ...patch } };
@@ -67,7 +81,9 @@ export function SheetTabs({ character: c, state, canEdit, onRoll, onPatch, log, 
   };
   const rollCheck = (label: string, base: number, ctx: RollCtx) => {
     const a = adjust(base, ctx);
-    onRoll({ label, formula: `1d20${fmtMod(a.value)}`, kind: "check", notes: a.notes || undefined });
+    // Los ataques de conjuro e impulso muestran chispas y runas sobre el token
+    const magic = ctx.kind === "spell-attack" || ctx.kind === "impulse-attack";
+    onRoll({ label, formula: `1d20${fmtMod(a.value)}`, kind: "check", notes: a.notes || undefined, fx: magic ? { kind: "spell" } : undefined });
   };
   const statCtx = (s: Stat): RollCtx => ({ kind: "skill", key: s.key.startsWith("lore:") ? "lore" : s.key, ability: s.ability ?? "int" });
   const saveCtx = (s: Stat): RollCtx => ({ kind: "save", key: s.key as "fortitude" | "reflex" | "will" });
@@ -77,7 +93,14 @@ export function SheetTabs({ character: c, state, canEdit, onRoll, onPatch, log, 
     if (what === "attack") {
       const a = adjust(w.attack, { kind: "attack", melee, finesse: w.finesse });
       const step = mapSteps({ ...w, attack: a.value })[mapIndex];
-      onRoll({ label: `${w.name}: ${MAP_LABEL[mapIndex]}`, formula: `1d20${fmtMod(step)}`, kind: "check", notes: a.notes || undefined });
+      const fx = fxOf(w);
+      onRoll({
+        label: `${w.name}: ${MAP_LABEL[mapIndex]}`,
+        formula: `1d20${fmtMod(step)}`,
+        kind: "check",
+        notes: a.notes || undefined,
+        fx: fxPref.on && fx !== "none" ? { kind: fx, dir: fxPref.dir } : undefined,
+      });
       return;
     }
     const pen = checkAdjust(state?.cond, { kind: "damage", melee });
@@ -113,6 +136,17 @@ export function SheetTabs({ character: c, state, canEdit, onRoll, onPatch, log, 
         {tab === "attacks" && (
           <>
             {weapons.length === 0 && !c.impulse && <p className="muted">Este personaje no tiene armas en Pathbuilder.</p>}
+            {weapons.length > 0 && (
+              <div className="fx-row">
+                <div>
+                  <b>Efecto en el mapa</b>
+                  <span className="muted small">
+                    {fxPref.on ? "Elige hacia dónde atacas; se ve al tirar el ataque." : "Apagado: los ataques no muestran efecto."}
+                  </span>
+                </div>
+                <FxDir dir={fxPref.dir} on={fxPref.on} onChange={setFxPref} />
+              </div>
+            )}
             {weapons.map((w) => {
               const atk = adjust(w.attack, { kind: "attack", melee: !w.ranged, finesse: w.finesse });
               const steps = mapSteps({ ...w, attack: atk.value });
@@ -153,6 +187,28 @@ export function SheetTabs({ character: c, state, canEdit, onRoll, onPatch, log, 
                         ft
                       </label>
                     )}
+                    <select
+                      className="fx-select"
+                      value={fxOf(w)}
+                      title="Efecto visual de este ataque"
+                      onChange={(e) => setFlag(w, { fx: e.target.value as AttackFx | "none" })}
+                    >
+                      <option value="none">✦ Sin efecto</option>
+                      <optgroup label="Cuerpo a cuerpo">
+                        {ATTACK_FX.filter((f) => !f.ranged).map((f) => (
+                          <option key={f.id} value={f.id}>
+                            ✦ {f.label}
+                          </option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="A distancia">
+                        {ATTACK_FX.filter((f) => f.ranged).map((f) => (
+                          <option key={f.id} value={f.id}>
+                            ✦ {f.label}
+                          </option>
+                        ))}
+                      </optgroup>
+                    </select>
                     {w.extra.map((e) => (
                       <button
                         key={extraKey(e)}

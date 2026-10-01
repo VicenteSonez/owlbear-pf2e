@@ -72,7 +72,7 @@ export function MagicPanel(props: SideProps & { onRoll: (r: RollRequest) => void
             <span className="muted small">
               {TRADITION[k.tradition] ?? k.tradition} · {k.innate ? "Innato" : (TYPE_LABEL[k.type.toLowerCase()] ?? k.type)}
             </span>
-            <button className="btn small-btn" title={a.notes} onClick={() => onRoll({ label: `${k.name}: Ataque de conjuro`, formula: `1d20${fmtMod(a.attack)}`, kind: "check", notes: a.notes })}>
+            <button className="btn small-btn" title={a.notes} onClick={() => onRoll({ label: `${k.name}: Ataque de conjuro`, formula: `1d20${fmtMod(a.attack)}`, kind: "check", notes: a.notes, fx: { kind: "spell" } })}>
               Ataque {fmtMod(a.attack)}
             </button>
             <span className="dc">CD {a.dc}</span>

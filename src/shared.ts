@@ -1,6 +1,7 @@
 import type { Character } from "./pathbuilder";
 import type { Conditions, Degree } from "./rules";
 import type { Extras } from "./extras";
+import type { RollFx } from "./fx";
 
 export const ID = "cl.nacho.pf2e-sheets";
 export const META_TOKEN = `${ID}/token`;
@@ -93,6 +94,9 @@ export interface RollEntry {
   degree?: Degree;
   // Color de los dados de quien tiró (se ve en la tarjeta)
   diceColor?: string;
+  // Personaje (o mascota) que tiró y efecto a mostrar sobre su token
+  charId?: string;
+  fx?: RollFx;
 }
 
 // Tarjeta de tirada en la esquina inferior derecha

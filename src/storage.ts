@@ -1,5 +1,6 @@
 import { PARSER_VERSION, parsePathbuilder, type Character, type Weapon } from "./pathbuilder";
 import { DEFAULT_DICE_STYLE, type DiceStyle } from "./dice";
+import type { AttackFx } from "./fx";
 import { TOAST_KEY, type RollEntry, type ToastItem, type VitalState } from "./shared";
 
 // Todas las páginas de la extensión comparten origen, así que comparten localStorage.
@@ -29,6 +30,8 @@ export interface WeaponFlags {
   ranged?: boolean;
   range?: number;
   extras?: Record<string, boolean>;
+  // Efecto visual del ataque ("none" = sin efecto)
+  fx?: AttackFx | "none";
 }
 
 export const extraKey = (e: { dice: number; sides: number; type: string }) => `${e.dice}d${e.sides} ${e.type}`;
@@ -111,6 +114,9 @@ export const store = {
   // a la iniciativa los tokens que acababa de seleccionar
   lastSelection: () => read<{ ids: string[]; t: number } | null>("pf2.lastSel", null),
   setLastSelection: (ids: string[]) => write("pf2.lastSel", { ids, t: Date.now() }),
+  // Dirección de los efectos de ataque y si están activos, por personaje
+  fxPref: (charId: string) => read<{ dir: number; on: boolean }>(`pf2.fx.${charId}`, { dir: 2, on: true }),
+  setFxPref: (charId: string, p: { dir: number; on: boolean }) => write(`pf2.fx.${charId}`, p),
   toasts: () => read<ToastItem[]>(TOAST_KEY, []),
   setToasts: (list: ToastItem[]) => write(TOAST_KEY, list),
 };
