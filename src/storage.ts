@@ -1,5 +1,6 @@
 import type { Character } from "./pathbuilder";
-import type { RollEntry, VitalState } from "./shared";
+import { DEFAULT_DICE_STYLE, type DiceStyle } from "./dice";
+import { TOAST_KEY, type RollEntry, type ToastItem, type VitalState } from "./shared";
 
 // Todas las páginas de la extensión comparten origen, así que comparten localStorage.
 function read<T>(key: string, fallback: T): T {
@@ -45,4 +46,8 @@ export const store = {
     write(`pf2.log.${roomId}`, [e, ...list].slice(0, LOG_LIMIT));
   },
   clearLog: (roomId: string) => write(`pf2.log.${roomId}`, []),
+  diceStyle: () => ({ ...DEFAULT_DICE_STYLE, ...read<Partial<DiceStyle>>("pf2.dice", {}) }),
+  setDiceStyle: (s: DiceStyle) => write("pf2.dice", s),
+  toasts: () => read<ToastItem[]>(TOAST_KEY, []),
+  setToasts: (list: ToastItem[]) => write(TOAST_KEY, list),
 };

@@ -5,6 +5,8 @@ export const META_TOKEN = `${ID}/token`;
 export const META_PLAYER = `${ID}/player`;
 export const CHANNEL_ROLL = `${ID}/roll`;
 export const OVERLAY_PREFIX = `${ID}-overlay`;
+export const TOAST_POPOVER = `${ID}/toasts`;
+export const TOAST_KEY = "pf2.toasts";
 
 // Vive en la metadata del token: es la fuente de verdad de HP/CA cuando hay token vinculado.
 export interface TokenData {
@@ -50,6 +52,14 @@ export interface RollEntry {
   nat?: 1 | 20;
   crit?: boolean;
   secret?: boolean;
+  // Color de los dados de quien tiró (se ve en la tarjeta)
+  diceColor?: string;
+}
+
+// Tarjeta de tirada en la esquina inferior derecha
+export interface ToastItem {
+  entry: RollEntry;
+  until: number;
 }
 
 export const clamp = (n: number, min: number, max: number) => Math.min(max, Math.max(min, n));

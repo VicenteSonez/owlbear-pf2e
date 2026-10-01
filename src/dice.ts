@@ -50,8 +50,34 @@ export function randomValues(f: Formula): number[][] {
   return f.dice.map((d) => Array.from({ length: d.count }, () => randomDie(d.sides)));
 }
 
-// Dados que dice-box tiene en su tema por defecto
+// Dados que tienen todos los temas instalados
 const DICE_3D = new Set([4, 6, 8, 10, 12, 20]);
+
+export interface DiceStyle {
+  theme: string;
+  color: string;
+}
+
+// Debe coincidir con EXTRA_THEMES en scripts/copy-dice-assets.mjs.
+// Los temas "colorable" toman el color elegido; el resto trae sus propios colores.
+export const DICE_THEMES: { id: string; label: string; colorable: boolean }[] = [
+  { id: "default", label: "Clásico", colorable: true },
+  { id: "smooth", label: "Liso", colorable: true },
+  { id: "gemstone", label: "Gema", colorable: true },
+  { id: "rock", label: "Piedra", colorable: true },
+  { id: "rust", label: "Óxido", colorable: true },
+  { id: "wooden", label: "Madera", colorable: false },
+  { id: "gemstoneMarble", label: "Mármol", colorable: false },
+  { id: "blueGreenMetal", label: "Metal", colorable: false },
+  { id: "diceOfRolling", label: "Rolling", colorable: false },
+];
+
+export const DICE_COLORS = [
+  "#d4a72c", "#e8622c", "#c0392b", "#7b1e3a", "#7d3cbe",
+  "#2f6fd1", "#138a8a", "#2e8b57", "#e9e9e9", "#1d1d1f",
+];
+
+export const DEFAULT_DICE_STYLE: DiceStyle = { theme: "default", color: DICE_COLORS[0] };
 
 export function evaluate(f: Formula, values: number[][], opts: { crit?: boolean; check?: boolean }): RollOutcome {
   let sum = f.flat;
@@ -83,8 +109,13 @@ export function evaluate(f: Formula, values: number[][], opts: { crit?: boolean;
 export class Dice3D {
   private box: DiceBoxType | null = null;
   private ready: Promise<boolean> | null = null;
+  private style: DiceStyle = DEFAULT_DICE_STYLE;
 
-  init(containerSelector: string, color: string): Promise<boolean> {
+  setStyle(style: DiceStyle) {
+    this.style = style;
+  }
+
+  init(containerSelector: string): Promise<boolean> {
     if (this.ready) return this.ready;
     this.ready = (async () => {
       try {
@@ -95,8 +126,8 @@ export class Dice3D {
           container: containerSelector,
           assetPath,
           theme: "default",
-          themeColor: color,
-          scale: 7,
+          themeColor: DEFAULT_DICE_STYLE.color,
+          scale: 6,
           gravity: 2,
           throwForce: 6,
           spinForce: 5,
@@ -115,14 +146,22 @@ export class Dice3D {
     return this.ready;
   }
 
+  // El tema se carga la primera vez que se usa; si falla, se tira con el clásico
+  private async themeFor(style: DiceStyle): Promise<string> {
+    if (style.theme === "default") return "default";
+    const loaded = await this.box!.loadTheme(style.theme).catch(() => undefined);
+    return loaded ? style.theme : "default";
+  }
+
   async roll(f: Formula): Promise<number[][]> {
     const ok = this.ready ? await this.ready : false;
     const usable = ok && this.box && f.dice.every((d) => DICE_3D.has(d.sides)) && f.dice.length > 0;
     if (!usable) return randomValues(f);
     try {
       const groups = f.dice.map((d) => ({ qty: d.count, sides: d.sides }));
+      const theme = await this.themeFor(this.style);
       const results = await Promise.race([
-        this.box!.roll(groups),
+        this.box!.roll(groups, { theme, themeColor: this.style.color }),
         new Promise<never>((_, rej) => setTimeout(() => rej(new Error("timeout")), 9000)),
       ]);
       const values: number[][] = f.dice.map(() => []);

@@ -8,7 +8,8 @@ declare module "@3d-dice/dice-box" {
   export default class DiceBox {
     constructor(config: Record<string, unknown>);
     init(): Promise<DiceBox>;
-    roll(notation: unknown): Promise<DieResult[]>;
+    roll(notation: unknown, options?: { theme?: string; themeColor?: string }): Promise<DieResult[]>;
+    loadTheme(theme: string): Promise<unknown>;
     clear(): DiceBox;
     resizeWorld(): void;
   }

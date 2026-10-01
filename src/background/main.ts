@@ -1,11 +1,14 @@
 import OBR, { buildShape, buildText, type Item } from "@owlbear-rodeo/sdk";
 import { autoLinkCandidate, linkToken, publishPlayer, roomId, tokenData, whenReady } from "../obr";
 import { store } from "../storage";
+import { watchForUpdates } from "../autoUpdate";
 import {
   CHANNEL_ROLL,
   ID,
   META_TOKEN,
   OVERLAY_PREFIX,
+  TOAST_KEY,
+  TOAST_POPOVER,
   hpColor,
   visibleEntry,
   type RollEntry,
@@ -107,20 +110,84 @@ async function setupContextMenus() {
   });
 }
 
-// ---------- Tiradas compartidas ----------
+// ---------- Tiradas compartidas: registro + tarjetas abajo a la derecha ----------
+
+const toastUrl = new URL("toast.html", window.location.href).href;
+const TOAST_WIDTH = 300;
+const TOAST_CARD = 76;
+const TOAST_GAP = 8;
+const TOAST_CLEAR = 22;
+const TOAST_PAD = 4;
+const TOAST_MAX = 4;
+// Distancia al borde inferior: deja libres los controles de zoom/escala de Owlbear
+const TOAST_BOTTOM = 70;
+
+let toastOpen = false;
+let toastQueue: Promise<void> = Promise.resolve();
+
+const toastHeight = (n: number) =>
+  n * TOAST_CARD + (n - 1) * TOAST_GAP + (n > 1 ? TOAST_CLEAR + TOAST_GAP : 0) + TOAST_PAD;
+
+const liveToasts = () => store.toasts().filter((t) => t.until > Date.now());
+
+// Abre, redimensiona o cierra la ventana de tarjetas según las que siguen vigentes.
+// Se encola para que dos tiradas seguidas no abran la ventana dos veces.
+function syncToasts() {
+  toastQueue = toastQueue
+    .then(async () => {
+      const list = liveToasts();
+      if (list.length !== store.toasts().length) store.setToasts(list);
+      if (!list.length) {
+        if (toastOpen) {
+          toastOpen = false;
+          await OBR.popover.close(TOAST_POPOVER);
+        }
+        return;
+      }
+      const height = toastHeight(list.length);
+      if (toastOpen) {
+        await OBR.popover.setHeight(TOAST_POPOVER, height);
+        return;
+      }
+      const [width, viewHeight] = await Promise.all([OBR.viewport.getWidth(), OBR.viewport.getHeight()]);
+      await OBR.popover.open({
+        id: TOAST_POPOVER,
+        url: toastUrl,
+        width: TOAST_WIDTH,
+        height,
+        anchorReference: "POSITION",
+        anchorPosition: { left: width - 16, top: viewHeight - TOAST_BOTTOM },
+        transformOrigin: { horizontal: "RIGHT", vertical: "BOTTOM" },
+        hidePaper: true,
+        disableClickAway: true,
+        marginThreshold: 0,
+      });
+      toastOpen = true;
+    })
+    .catch((err) => console.error("[PF2e] Error con las tarjetas de tirada", err));
+}
+
+function addToast(entry: RollEntry) {
+  const ms = entry.nat ? 11_000 : 8_000;
+  const list = [...liveToasts().filter((t) => t.entry.id !== entry.id), { entry, until: Date.now() + ms }];
+  store.setToasts(list.slice(-TOAST_MAX));
+  syncToasts();
+  window.setTimeout(syncToasts, ms + 50);
+}
 
 function setupRolls() {
-  OBR.broadcast.onMessage(CHANNEL_ROLL, async (event) => {
+  // Si esta página se recargó con tarjetas abiertas, empieza desde cero
+  store.setToasts([]);
+  OBR.popover.close(TOAST_POPOVER).catch(() => undefined);
+  OBR.broadcast.onMessage(CHANNEL_ROLL, (event) => {
     const entry = visibleEntry(event.data as RollEntry, meId, role);
     if (!entry) return;
     store.pushLog(roomId(), entry);
-    if (entry.playerId === meId) return;
-    // Si la hoja está abierta ya se ve en el registro; si no, avisamos
-    if (await OBR.action.isOpen()) return;
-    const who = entry.charName ? `${entry.playerName} (${entry.charName})` : entry.playerName;
-    const nat = entry.nat === 20 ? " — ¡20 natural!" : entry.nat === 1 ? " — 1 natural" : "";
-    const secret = entry.secret ? "🔒 " : "";
-    OBR.notification.show(`${secret}${who}: ${entry.label} → ${entry.total}${nat}`, entry.nat === 20 ? "SUCCESS" : "DEFAULT");
+    addToast(entry);
+  });
+  // La ventana de tarjetas escribe aquí al cerrar una tarjeta o limpiar todas
+  window.addEventListener("storage", (e) => {
+    if (e.key === TOAST_KEY) syncToasts();
   });
 }
 
@@ -353,6 +420,7 @@ function publishActive() {
   publishPlayer(c ? { character: c, vitals: store.vitals(c) } : null);
 }
 
+watchForUpdates();
 whenReady().then(async (ok) => {
   if (!ok) return;
   role = await OBR.player.getRole();

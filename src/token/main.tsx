@@ -4,6 +4,9 @@ import OBR, { type Item } from "@owlbear-rodeo/sdk";
 import { patchToken, tokenData, unlinkToken, whenReady } from "../obr";
 import { applyHpDelta, hpColor, type TokenData } from "../shared";
 import "../styles.css";
+import { watchForUpdates } from "../autoUpdate";
+
+watchForUpdates();
 
 function NumField(props: { label: string; value: number; onCommit: (n: number) => void; min?: number }) {
   const [text, setText] = useState(String(props.value));
