@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Owlbear Rodeo extension (SDK v3) for Pathfinder 2e. It imports Pathbuilder 2e JSON sheets, rolls 3D dice with the bonuses already added, applies PF2e conditions and rules, and keeps HP/AC in sync with map tokens. Stack: React 19, Vite 8, TypeScript. All UI text and code comments are in **Spanish**; keep them that way.
 
-The pending feature list lives in `Prompts pendientes.docx`, which is not committed. The work is split into phases: 1 dice ✅, 2 rules/sheet/GM tab ✅, 3 combat/initiative, 4 side tabs (Dotes, Inventario, Magia, Recetas, Mascota), 5 map VFX.
+The pending feature list lives in `Prompts pendientes.docx`, which is not committed. The work is split into phases: 1 dice ✅, 2 rules/sheet/GM tab ✅, 3 combat/initiative ✅, 4 side tabs (Dotes, Inventario, Magia, Recetas, Mascota), 5 map VFX.
 
 ## Commands
 
@@ -55,6 +55,14 @@ There are four Vite entry pages, each its own Owlbear iframe:
   - PC tokens hold only `{kind:"pc", characterId, ownerId}`; their numbers come from live state.
   - NPC tokens hold their own HP/AC/cond. Read them through `npcState()` and write through `patchNpc()`.
 - **Rolls**: sent with `OBR.broadcast` on `CHANNEL_ROLL` (destination ALL). `visibleEntry()` hides secret rolls from non-GMs. The log and toasts are kept per browser.
+- **Combat** (`src/combat.ts`):
+  - The `Combat` object (round, current turn, NPC combatants, excluded PCs) lives in one room key, `META_COMBAT`, and **only the GM writes it**.
+  - Each PC's initiative lives in its own `PcState.init`, so players rolling at the same moment don't overwrite each other.
+  - Order is derived in `combatEntries()`: initiative descending, then the tiebreak `tb` (NPCs beat PCs unless the PC has `winsTies`). The GM's ▲/▼ buttons rewrite `init`/`tb`.
+  - Turn effects in `src/turns.ts` run only on the GM's client, inside `useCombatActions().step`:
+    - end of turn: persistent damage, Frightened −1;
+    - start of turn: fast healing, lower the shield, recovery check.
+  - The background script draws the gold ring on the token whose turn it is and notifies that PC's owner.
 
 ### Rules engine
 
@@ -79,4 +87,5 @@ The UI shows values that already include conditions.
 ## Conventions
 
 - On Windows/Git Bash, heredocs containing `!` break. Use the Write/Edit tools for file contents instead.
+- To remove a metadata key from an Owlbear item draft, assign `undefined`. Owlbear does not persist `delete draft.metadata[key]`.
 - Pathbuilder doesn't export weapon traits. Agile, finesse and ranged are guessed from name tables in `pathbuilder.ts`, and the user can override them per weapon (`WeaponFlags` in storage).

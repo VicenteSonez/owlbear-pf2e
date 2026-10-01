@@ -107,6 +107,10 @@ export const store = {
   // Habilidad elegida para la iniciativa y si gana los empates
   initPref: (charId: string) => read<{ skill: string; winsTies: boolean }>(`pf2.init.${charId}`, { skill: "perception", winsTies: false }),
   setInitPref: (charId: string, p: { skill: string; winsTies: boolean }) => write(`pf2.init.${charId}`, p),
+  // Última selección del mapa: abrir la extensión la borra, así el GM puede agregar
+  // a la iniciativa los tokens que acababa de seleccionar
+  lastSelection: () => read<{ ids: string[]; t: number } | null>("pf2.lastSel", null),
+  setLastSelection: (ids: string[]) => write("pf2.lastSel", { ids, t: Date.now() }),
   toasts: () => read<ToastItem[]>(TOAST_KEY, []),
   setToasts: (list: ToastItem[]) => write(TOAST_KEY, list),
 };

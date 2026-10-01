@@ -70,7 +70,7 @@ export function CombatView({ combat, entries, isGm, own, ownState, npcStates, al
 
   const report = (n: number, what: string) => {
     setMsg(n ? `${n} agregado${n > 1 ? "s" : ""}.` : what);
-    window.setTimeout(() => setMsg(""), 2500);
+    window.setTimeout(() => setMsg(""), 5000);
   };
 
   return (
@@ -217,7 +217,7 @@ export function CombatView({ combat, entries, isGm, own, ownState, npcStates, al
             </button>
           </form>
           <div className="ca-row">
-            <button className="btn ghost" onClick={async () => report(await actions.addSelected(modValue), "Selecciona tokens en el mapa primero.")}>
+            <button className="btn ghost" onClick={async () => report(await actions.addSelected(modValue), "Nada nuevo: selecciona tokens en el mapa (que no estén ya en la lista).")}>
               + Tokens seleccionados
             </button>
             <button className="btn ghost" onClick={async () => report(await actions.addSceneNpcs(modValue), "No hay PNJ nuevos en la escena.")}>

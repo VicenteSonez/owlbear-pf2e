@@ -590,6 +590,7 @@ function setupOverlays() {
     }
   });
   OBR.player.onChange((p) => {
+    if (p.selection?.length) store.setLastSelection(p.selection);
     if (p.role !== role) {
       role = p.role;
       resetOverlays();

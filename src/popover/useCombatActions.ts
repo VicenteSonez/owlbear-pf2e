@@ -4,6 +4,7 @@ import { fmtMod } from "../pathbuilder";
 import { live } from "../live";
 import { inOwlbear, tokenData } from "../obr";
 import { newId } from "../shared";
+import { store } from "../storage";
 import { autoRoll, type Roller } from "../autoRoll";
 import { EMPTY_COMBAT, combatStore, moveTarget, stepTurn, type Combat, type Entry, type NpcCombatant } from "../combat";
 import { endOfTurn, startOfTurn, type Publish } from "../turns";
@@ -47,7 +48,9 @@ export function useCombatActions(combat: Combat, entries: Entry[], who: Roller, 
       const include: string[] = [];
       for (const item of items) {
         const d = tokenData(item);
-        if (d?.kind === "pc" && d.characterId) include.push(d.characterId);
+        if (d?.kind === "pc" && d.characterId) {
+          if (combat.excluded.includes(d.characterId)) include.push(d.characterId);
+        }
         else if (!combat.npcs.some((n) => n.tokenId === item.id)) {
           npcs.push({ name: item.name || d?.name || "Criatura", mod, tokenId: item.id, hidden: !item.visible });
         }
@@ -136,7 +139,10 @@ export function useCombatActions(combat: Combat, entries: Entry[], who: Roller, 
 
       async addSelected(mod: number) {
         if (!inOwlbear) return 0;
-        return addTokens((await OBR.player.getSelection()) ?? [], mod);
+        let ids = (await OBR.player.getSelection()) ?? [];
+        const last = store.lastSelection();
+        if (!ids.length && last && Date.now() - last.t < 120_000) ids = last.ids;
+        return addTokens(ids, mod);
       },
 
       // Todos los tokens con estadísticas de PNJ que aún no están en la iniciativa
