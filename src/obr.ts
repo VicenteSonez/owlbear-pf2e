@@ -39,7 +39,7 @@ export async function linkToken(itemId: string, c: Character, ownerId?: string) 
   );
   if (previous.length) {
     await OBR.scene.items.updateItems(previous.map((i) => i.id), (drafts) => {
-      for (const d of drafts) delete d.metadata[META_TOKEN];
+      for (const d of drafts) d.metadata[META_TOKEN] = undefined; // Owlbear ignora `delete` en el borrador
     });
   }
   const data: TokenData = { kind: "pc", characterId: c.id, ownerId: owner, name: c.name };
@@ -76,7 +76,7 @@ export async function patchNpc(itemId: string, fn: (n: NpcState) => NpcState) {
 
 export async function unlinkToken(itemId: string) {
   await OBR.scene.items.updateItems([itemId], (drafts) => {
-    for (const d of drafts) delete d.metadata[META_TOKEN];
+    for (const d of drafts) d.metadata[META_TOKEN] = undefined; // Owlbear ignora `delete` en el borrador
   });
 }
 
