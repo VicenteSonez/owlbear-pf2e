@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
-import OBR, { type Item } from "@owlbear-rodeo/sdk";
+import OBR from "@owlbear-rodeo/sdk";
 import type { Character } from "../pathbuilder";
 import { live, type PcState } from "../live";
-import { inOwlbear, patchNpc, tokenData, unlinkToken } from "../obr";
+import { inOwlbear, patchNpc, unlinkToken } from "../obr";
 import { DEATH_DYING, effectiveAc, effectiveMaxHp } from "../rules";
-import { hpColor, npcState, type NpcState, type TokenData } from "../shared";
+import { hpColor, npcState, type NpcState } from "../shared";
 import { ConditionRow, CondIcon } from "./bits";
 import { EffectsPanel, type Target } from "./EffectsPanel";
+import { useSceneTokens } from "./hooks";
 
 interface Props {
   states: Record<string, PcState>;
@@ -17,37 +18,6 @@ interface Props {
 }
 
 type Sel = { kind: "pc" | "npc"; id: string } | null;
-
-// Tokens de la escena con datos PF2e (PJ vinculados y PNJ)
-function useSceneTokens() {
-  const [tokens, setTokens] = useState<{ item: Item; data: TokenData }[]>([]);
-  useEffect(() => {
-    if (!inOwlbear) return;
-    let alive = true;
-    const pick = (items: Item[]) =>
-      items.flatMap((item) => {
-        const data = tokenData(item);
-        return data ? [{ item, data }] : [];
-      });
-    const load = async () => {
-      if (!(await OBR.scene.isReady())) {
-        if (alive) setTokens([]);
-        return;
-      }
-      const items = await OBR.scene.items.getItems();
-      if (alive) setTokens(pick(items));
-    };
-    load();
-    const offItems = OBR.scene.items.onChange((items) => setTokens(pick(items)));
-    const offReady = OBR.scene.onReadyChange(() => load());
-    return () => {
-      alive = false;
-      offItems();
-      offReady();
-    };
-  }, []);
-  return tokens;
-}
 
 function MiniCard(props: {
   name: string;

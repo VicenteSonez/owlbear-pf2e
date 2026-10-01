@@ -8,6 +8,7 @@ import type { Character } from "./pathbuilder";
 import { ID } from "./shared";
 import { inOwlbear, whenReady } from "./obr";
 import { effectiveMaxHp, type Conditions, type ShieldState, type Vitals } from "./rules";
+import type { InitRoll } from "./combat";
 
 export const META_PC_PREFIX = `${ID}/pc/`;
 const LOCAL_KEY = "pf2.live.local";
@@ -26,6 +27,8 @@ export interface PcState extends Vitals {
   cond: Conditions;
   hero: number;
   shield?: ShieldState;
+  // Iniciativa del combate en curso (se borra al terminar el combate)
+  init?: InitRoll;
   t: number;
 }
 

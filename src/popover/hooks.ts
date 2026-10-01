@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import OBR, { type Item, type Player } from "@owlbear-rodeo/sdk";
 import { inOwlbear, roomId, tokenData, whenReady } from "../obr";
 import { store } from "../storage";
-import { CHANNEL_ROLL, META_PLAYER, visibleEntry, type PlayerMeta, type RollEntry } from "../shared";
+import { CHANNEL_ROLL, META_PLAYER, visibleEntry, type PlayerMeta, type RollEntry, type TokenData } from "../shared";
 
 export interface Me {
   id: string;
@@ -118,4 +118,35 @@ export function useRollLog(session: Session) {
   }, [session.room]);
 
   return { log, publish, clear };
+}
+
+// Tokens de la escena con datos PF2e (PJ vinculados y PNJ)
+export function useSceneTokens() {
+  const [tokens, setTokens] = useState<{ item: Item; data: TokenData }[]>([]);
+  useEffect(() => {
+    if (!inOwlbear) return;
+    let alive = true;
+    const pick = (items: Item[]) =>
+      items.flatMap((item) => {
+        const data = tokenData(item);
+        return data ? [{ item, data }] : [];
+      });
+    const load = async () => {
+      if (!(await OBR.scene.isReady())) {
+        if (alive) setTokens([]);
+        return;
+      }
+      const items = await OBR.scene.items.getItems();
+      if (alive) setTokens(pick(items));
+    };
+    load();
+    const offItems = OBR.scene.items.onChange((items) => setTokens(pick(items)));
+    const offReady = OBR.scene.onReadyChange(() => load());
+    return () => {
+      alive = false;
+      offItems();
+      offReady();
+    };
+  }, []);
+  return tokens;
 }

@@ -104,6 +104,9 @@ export const store = {
   clearLog: (roomId: string) => write(`pf2.log.${roomId}`, []),
   diceStyle: () => ({ ...DEFAULT_DICE_STYLE, ...read<Partial<DiceStyle>>("pf2.dice", {}) }),
   setDiceStyle: (s: DiceStyle) => write("pf2.dice", s),
+  // Habilidad elegida para la iniciativa y si gana los empates
+  initPref: (charId: string) => read<{ skill: string; winsTies: boolean }>(`pf2.init.${charId}`, { skill: "perception", winsTies: false }),
+  setInitPref: (charId: string, p: { skill: string; winsTies: boolean }) => write(`pf2.init.${charId}`, p),
   toasts: () => read<ToastItem[]>(TOAST_KEY, []),
   setToasts: (list: ToastItem[]) => write(TOAST_KEY, list),
 };

@@ -3,6 +3,7 @@ import { autoLinkCandidate, linkToken, npcToToken, publishPlayer, roomId, tokenD
 import { store } from "../storage";
 import { watchForUpdates } from "../autoUpdate";
 import { live, needsSheetSync, seedState, syncSheet } from "../live";
+import { combatStore, npcKey, pcKey, type Combat } from "../combat";
 import { DEATH_DYING, activeConditionIcons, effectiveAc, effectiveMaxHp } from "../rules";
 import {
   CHANNEL_ROLL,
@@ -474,6 +475,7 @@ async function syncOverlays(items: Item[]) {
       if (del.length) await OBR.scene.local.deleteItems(del);
     }
     if (toAdd.length) await OBR.scene.local.addItems(toAdd);
+    await syncTurnRing();
   } catch (err) {
     console.error("[PF2e] Error dibujando barras", err);
   } finally {
@@ -486,8 +488,71 @@ async function syncOverlays(items: Item[]) {
   }
 }
 
+// ---------- Turno actual: anillo dorado en su token y aviso a su jugador ----------
+
+const RING_ID = `${OVERLAY_PREFIX}-turnring`;
+let ringSig: string | null = null;
+let lastCurrent: string | null | undefined;
+
+function turnTokenId(c: Combat): string | null {
+  if (!c.active || !c.current) return null;
+  for (const s of Object.values(live.all())) {
+    if (c.current === pcKey(s.id)) return lastItems.find((i) => tokenData(i)?.characterId === s.id)?.id ?? null;
+  }
+  const npc = c.npcs.find((n) => c.current === npcKey(n.id));
+  if (!npc?.tokenId || (npc.hidden && role !== "GM")) return null;
+  return npc.tokenId;
+}
+
+async function syncTurnRing() {
+  const id = turnTokenId(combatStore.get());
+  const item = id ? lastItems.find((i) => i.id === id) : undefined;
+  const show = !!item && (item.visible || role === "GM");
+  const sig = show ? JSON.stringify([item.id, item.scale, item.visible, dpi]) : null;
+  if (sig === ringSig) return;
+  ringSig = sig;
+  const old = await OBR.scene.local.getItems([RING_ID]);
+  if (old.length) await OBR.scene.local.deleteItems([RING_ID]);
+  if (!show || !item) return;
+  const b = await OBR.scene.items.getItemBounds([item.id]);
+  const size = Math.max(b.width, b.height) * 1.12;
+  await OBR.scene.local.addItems([
+    buildShape()
+      .id(RING_ID)
+      .shapeType("CIRCLE")
+      .width(size)
+      .height(size)
+      .position(b.center)
+      .fillOpacity(0)
+      .strokeColor("#ffc94a")
+      .strokeOpacity(0.95)
+      .strokeWidth(dpi * 0.06)
+      .attachedTo(item.id)
+      .layer("ATTACHMENT")
+      .locked(true)
+      .disableHit(true)
+      .visible(item.visible)
+      .disableAttachmentBehavior(["ROTATION", "SCALE", "LOCKED", "COPY"])
+      .zIndex(1)
+      .build(),
+  ]);
+}
+
+function onCombatChange(c: Combat) {
+  if (lastItems.length) syncTurnRing().catch((err) => console.error("[PF2e] Error dibujando el turno", err));
+  const first = lastCurrent === undefined;
+  if (c.current === lastCurrent) return;
+  lastCurrent = c.current;
+  if (first || !c.active || !c.current) return;
+  // Aviso al dueño del PJ que empieza su turno
+  for (const s of Object.values(live.all())) {
+    if (c.current === pcKey(s.id) && s.owner === meId) OBR.notification.show(`¡Es tu turno, ${s.name}!`, "SUCCESS");
+  }
+}
+
 async function resetOverlays() {
   rendered.clear();
+  ringSig = null;
   if (!(await OBR.scene.isReady())) return;
   const old = await OBR.scene.local.getItems((i) => i.id.startsWith(OVERLAY_PREFIX));
   if (old.length) await OBR.scene.local.deleteItems(old.map((i) => i.id));
@@ -501,6 +566,8 @@ function setupOverlays() {
   live.subscribe(() => {
     if (lastItems.length) syncOverlays(lastItems);
   });
+  // Se suscribe ya cargado, para no avisar del turno en curso al abrir la sala
+  combatStore.start().then(() => combatStore.subscribe(onCombatChange));
   OBR.scene.grid.onChange((grid) => {
     if (grid.dpi !== dpi) resetOverlays();
   });

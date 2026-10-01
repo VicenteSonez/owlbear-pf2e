@@ -2,13 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import OBR from "@owlbear-rodeo/sdk";
 import { fmtMod, type Character } from "../pathbuilder";
 import { Dice3D, evaluate, parseFormula, randomValues, type DiceStyle } from "../dice";
-import { autoLinkCandidate, inOwlbear, linkToken, patchNpc, publishPlayer, unlinkToken } from "../obr";
+import { autoLinkCandidate, inOwlbear, linkToken, publishPlayer, unlinkToken } from "../obr";
 import { store } from "../storage";
 import { live, needsSheetSync, seedState, syncSheet, useLiveStates, type PcState } from "../live";
-import { DEGREE_LABEL, applyDamage, applyRecovery, degreeOf, type Conditions, type Degree } from "../rules";
-import { newId, type RollEntry } from "../shared";
-import { resolvePersistent } from "../autoRoll";
-import { playerMeta, useLinkedToken, useParty, useRollLog, useSession } from "./hooks";
+import { DEGREE_LABEL, applyRecovery, degreeOf, type Degree } from "../rules";
+import { newId, npcState, type NpcState, type RollEntry } from "../shared";
+import { combatEntries, pcKey, useCombat } from "../combat";
+import { applyPersistent } from "../turns";
+import { playerMeta, useLinkedToken, useParty, useRollLog, useSceneTokens, useSession } from "./hooks";
 import { Importer } from "./Importer";
 import { SheetTabs } from "./SheetTabs";
 import { Vitals } from "./Vitals";
@@ -18,6 +19,9 @@ import { NatFx } from "./NatFx";
 import { FlatChecks, type FlatRequest } from "./FlatChecks";
 import { GmView } from "./GmView";
 import type { Target } from "./EffectsPanel";
+import { CombatView } from "./CombatView";
+import { InitPanel, initFormula, type InitOption } from "./Initiative";
+import { useCombatActions } from "./useCombatActions";
 
 const dice = new Dice3D();
 
@@ -33,6 +37,8 @@ export interface RollRequest {
   // Condiciones que modifican la tirada, para mostrarlas junto al resultado
   notes?: string;
   flat?: FlatRequest;
+  // Por defecto la tirada es del personaje en pantalla
+  charName?: string;
 }
 
 interface Current {
@@ -64,7 +70,7 @@ interface Overlay {
 const OVERLAY_MS = 1700;
 const OVERLAY_NAT_MS = 2900;
 
-type View = "sheet" | "gm" | "import" | "gm-import";
+type View = "sheet" | "gm" | "combat" | "import" | "gm-import";
 
 const degreeClass = (d?: Degree) => (d ? (d.includes("success") ? "ok" : "fail") : "");
 
@@ -198,7 +204,7 @@ export function App() {
   const [extra, setExtra] = useState(0);
   const [freeText, setFreeText] = useState("");
   const [diceStyle, setDiceStyle] = useState<DiceStyle>(() => store.diceStyle());
-  const [menu, setMenu] = useState<"dice" | "flat" | null>(null);
+  const [menu, setMenu] = useState<"dice" | "flat" | "init" | null>(null);
   const [overlay, setOverlay] = useState<Overlay>({ phase: "hidden", key: 0, label: "" });
   const busy = useRef(false);
   const rollKey = useRef(0);
@@ -277,7 +283,7 @@ export function App() {
   );
 
   const roll = useCallback(
-    async (req: RollRequest, opts: { preview?: boolean } = {}) => {
+    async (req: RollRequest, opts: { preview?: boolean; quick?: boolean } = {}): Promise<number | undefined> => {
       if (busy.current) return;
       let formula = req.formula;
       if (req.kind === "check" && extra) formula += fmtMod(extra);
@@ -291,7 +297,8 @@ export function App() {
       busy.current = true;
       // Un jugador no ve su tirada secreta: ni animación ni resultado
       const isSecret = secret && !opts.preview;
-      const hideFromMe = isSecret && !isGm;
+      // Sin la hoja en pantalla no hay dónde animar los dados: se tira sin animación
+      const hideFromMe = (isSecret && !isGm) || !!opts.quick;
       const key = ++rollKey.current;
       const rollingFor = character?.id;
       setCurrent({ label: req.label, formula, rolling: true, secret: isSecret });
@@ -320,7 +327,7 @@ export function App() {
           });
         }
         setCurrent(
-          hideFromMe
+          isSecret && !isGm
             ? { label: req.label, formula, rolling: false, secret: true }
             : {
                 label: req.label,
@@ -334,12 +341,12 @@ export function App() {
                 rolling: false,
               },
         );
-        if (opts.preview) return;
+        if (opts.preview) return out.total;
         const entry: RollEntry = {
           id: newId(),
           time: Date.now(),
           ...who,
-          charName: character?.name,
+          charName: req.charName ?? character?.name,
           label: req.label,
           formula: shownFormula,
           detail: out.detail,
@@ -356,6 +363,7 @@ export function App() {
         await publish(entry);
         // La tirada de recuperación cambia moribundo según el resultado
         if (req.flat?.recovery && degree && rollingFor) await live.patch(rollingFor, (s) => applyRecovery(s, degree!));
+        return out.total;
       } finally {
         busy.current = false;
       }
@@ -366,26 +374,36 @@ export function App() {
   const freeRoll = (formula: string) => roll({ label: "Tirada libre", formula, kind: "free" });
   const flatRoll = (r: FlatRequest) => roll({ label: r.label, formula: "1d20", kind: "flat", flat: r });
 
-  // GM: resuelve el daño persistente de un PJ o PNJ (luego lo hará solo la iniciativa)
+  // GM: resuelve el daño persistente de un PJ o PNJ fuera de los turnos
   const resolvePersistentFor = useCallback(
-    async (t: Target) => {
-      const list = t.state.cond?.persistent ?? [];
-      if (!list.length) return;
-      const { damage, ended, entries } = resolvePersistent(who, t.state.name, list);
-      // Un PNJ oculto no debe delatarse en las tarjetas de los jugadores
-      const hidden = t.kind === "npc" && !!t.state.hidden;
-      for (const e of entries) await publish(hidden ? { ...e, secret: true } : e);
-      const prune = (c: Conditions): Conditions => ({ ...c, persistent: (c.persistent ?? []).filter((p) => !ended.includes(p.id)) });
-      if (t.kind === "pc") {
-        await live.patch(t.state.id, (s) => ({ ...applyDamage(s, damage), cond: prune(s.cond) }));
-      } else {
-        await patchNpc(t.tokenId, (n) => {
-          const hit = applyDamage({ hp: n.hp, temp: n.temp, dying: 0, wounded: 0 }, damage);
-          return { ...n, hp: hit.hp, temp: hit.temp, cond: prune(n.cond) };
-        });
-      }
-    },
+    (t: Target) => applyPersistent(t.kind === "pc" ? t : { ...t, secret: t.state.hidden }, who, publish),
     [who, publish],
+  );
+
+  // ---------- Combate ----------
+  const combat = useCombat();
+  const entries = useMemo(() => combatEntries(combat, states), [combat, states]);
+  const actions = useCombatActions(combat, entries, who, publish);
+  const sceneTokens = useSceneTokens();
+  const npcStates = useMemo(() => {
+    const map: Record<string, NpcState> = {};
+    for (const t of sceneTokens) if (t.data.kind === "npc") map[t.item.id] = npcState(t.data);
+    return map;
+  }, [sceneTokens]);
+  const myTurn = combat.active && !!own && combat.current === pcKey(own.id);
+
+  // Tira iniciativa y la guarda en el estado del PJ para la lista de combate
+  const rollInit = useCallback(
+    async (c: Character, opt: InitOption, winsTies: boolean) => {
+      const f = initFormula(opt, live.get(c.id));
+      const total = await roll(
+        { label: `Iniciativa (${opt.label})`, formula: f.formula, kind: "check", notes: f.notes, charName: c.name },
+        { quick: view !== "sheet" },
+      );
+      if (total === undefined) return;
+      await live.patch(c.id, (s) => ({ ...s, init: { value: total, skill: opt.key, label: opt.label, winsTies, t: Date.now() } }));
+    },
+    [roll, view],
   );
 
   if (!session.ready) return <div className="loading">Conectando con Owlbear…</div>;
@@ -414,6 +432,13 @@ export function App() {
             GM
           </button>
         )}
+        <button
+          className={`${view === "combat" ? "on" : ""} ${myTurn ? "my-turn" : ""}`}
+          title={myTurn ? "¡Es tu turno!" : "Iniciativa y combate"}
+          onClick={() => setView("combat")}
+        >
+          ⚔ Combate{combat.active && combat.round ? ` · R${combat.round}` : ""}
+        </button>
         <button className={`icon ${view === "import" ? "on" : ""}`} title="Personajes / importar" onClick={() => setView("import")}>
           ⚙
         </button>
@@ -444,6 +469,20 @@ export function App() {
           }}
           onUpload={() => setView("gm-import")}
           onResolvePersistent={resolvePersistentFor}
+        />
+      )}
+
+      {view === "combat" && (
+        <CombatView
+          combat={combat}
+          entries={entries}
+          isGm={isGm}
+          own={own}
+          ownState={own ? states[own.id] : undefined}
+          npcStates={npcStates}
+          allPcs={Object.values(states)}
+          actions={actions}
+          onRollInit={(opt, winsTies) => own && rollInit(own, opt, winsTies)}
         />
       )}
 
@@ -483,6 +522,13 @@ export function App() {
                   </button>
                 ))}
                 <button
+                  className={`btn dice init ${menu === "init" ? "on" : ""}`}
+                  title="Tirar iniciativa"
+                  onClick={() => setMenu((m) => (m === "init" ? null : "init"))}
+                >
+                  ⚔
+                </button>
+                <button
                   className={`btn dice flat ${menu === "flat" ? "on" : ""}`}
                   title="Tiradas planas: CD 11, CD 5, recuperación…"
                   onClick={() => setMenu((m) => (m === "flat" ? null : "flat"))}
@@ -503,6 +549,14 @@ export function App() {
                   onChange={changeDiceStyle}
                   onClose={() => setMenu(null)}
                   onTest={() => roll({ label: "Prueba de dados", formula: "1d20", kind: "free" }, { preview: true })}
+                />
+              )}
+              {menu === "init" && character && (
+                <InitPanel
+                  character={character}
+                  state={state}
+                  onRoll={(opt, winsTies) => rollInit(character, opt, winsTies)}
+                  onClose={() => setMenu(null)}
                 />
               )}
               {menu === "flat" && (
