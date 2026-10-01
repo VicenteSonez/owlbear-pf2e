@@ -10,6 +10,7 @@ declare module "@3d-dice/dice-box" {
     init(): Promise<DiceBox>;
     roll(notation: unknown, options?: { theme?: string; themeColor?: string }): Promise<DieResult[]>;
     loadTheme(theme: string): Promise<unknown>;
+    updateConfig(config: Record<string, unknown>): Promise<DiceBox>;
     clear(): DiceBox;
     resizeWorld(): void;
   }

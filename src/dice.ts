@@ -117,6 +117,8 @@ export class Dice3D {
 
   init(containerSelector: string): Promise<boolean> {
     if (this.ready) return this.ready;
+    // Si la zona de dados todavía no está en la página, se reintenta en el próximo render
+    if (!document.querySelector(containerSelector)) return Promise.resolve(false);
     this.ready = (async () => {
       try {
         const { default: DiceBox } = await import("@3d-dice/dice-box");
@@ -146,6 +148,19 @@ export class Dice3D {
     return this.ready;
   }
 
+  // dice-box dibuja los dados en proporción al alto del lienzo: en paneles bajos
+  // se sube la escala para que el dado se vea de un tamaño parecido.
+  private scale = 6;
+  async fit(height: number) {
+    const ok = this.ready ? await this.ready : false;
+    if (!ok || !this.box || height < 80) return;
+    // La librería recomienda escalas de 2 a 9; sobre eso a veces no logra leer la cara del dado
+    const scale = Math.min(8, Math.max(5, (6 * 600) / height));
+    if (Math.abs(scale - this.scale) < 0.25) return;
+    this.scale = scale;
+    await this.box.updateConfig({ scale }).catch(() => undefined);
+  }
+
   // El tema se carga la primera vez que se usa; si falla, se tira con el clásico
   private async themeFor(style: DiceStyle): Promise<string> {
     if (style.theme === "default") return "default";
@@ -166,8 +181,11 @@ export class Dice3D {
       ]);
       const values: number[][] = f.dice.map(() => []);
       for (const r of results) values[r.groupId]?.push(r.value);
-      // Si algo no cuadra, no confiamos en la física
-      if (values.some((v, i) => v.length !== f.dice[i].count)) return randomValues(f);
+      // Si algo no cuadra (dado perdido, cara ilegible), no confiamos en la física
+      const valid = values.every(
+        (v, i) => v.length === f.dice[i].count && v.every((n) => Number.isInteger(n) && n >= 1 && n <= f.dice[i].sides),
+      );
+      if (!valid) return randomValues(f);
       return values;
     } catch {
       return randomValues(f);

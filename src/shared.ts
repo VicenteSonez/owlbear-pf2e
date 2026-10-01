@@ -94,3 +94,16 @@ export function visibleEntry(e: RollEntry, meId: string, role: "GM" | "PLAYER"):
 }
 
 export const newId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+// Los colores de jugador muy oscuros (p. ej. negro) no se leen sobre el fondo de la hoja:
+// se aclaran mezclándolos con blanco.
+export function readableColor(hex: string): string {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return hex;
+  const n = parseInt(m[1], 16);
+  const rgb = [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  const lum = (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) / 255;
+  if (lum >= 0.4) return hex;
+  const mix = rgb.map((c) => Math.round(c + (255 - c) * 0.55));
+  return `rgb(${mix.join(", ")})`;
+}

@@ -134,9 +134,16 @@ export function App() {
     dice.setStyle(diceStyle);
   }, [diceStyle]);
 
+  // La zona de dados solo existe cuando ya se dibujó la hoja (tras conectar con Owlbear)
   useEffect(() => {
+    if (!session.ready) return;
     dice.init("#dice-stage");
-  }, []);
+    const stage = document.getElementById("dice-stage");
+    if (!stage) return;
+    const ro = new ResizeObserver(([e]) => dice.fit(e.contentRect.height));
+    ro.observe(stage);
+    return () => ro.disconnect();
+  }, [session.ready]);
 
   // dice-box mide el canvas al redimensionar la ventana; si estaba oculto, forzamos la medida
   const sheetVisible = view === "sheet" && !!character;
@@ -179,6 +186,7 @@ export function App() {
       setOverlay,
       setCurrent,
       holdOverlay: () => window.clearTimeout(hideTimer.current),
+      dice,
     };
   }, [showOverlay]);
 
