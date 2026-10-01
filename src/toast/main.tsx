@@ -23,7 +23,7 @@ function Card({ item, onDismiss }: { item: ToastItem; onDismiss: () => void }) {
     >
       <div className="t-head">
         <span className="dot" style={{ background: e.playerColor }} />
-        {who}
+        <span className="t-who">{who}</span>
         {tag && <span className="t-tag">{tag}</span>}
       </div>
       <div className="t-body">

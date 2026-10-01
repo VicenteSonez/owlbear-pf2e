@@ -660,7 +660,9 @@ body.toast-page { background: transparent; overflow: hidden; }
   text-overflow: ellipsis;
 }
 .t-head .dot { flex-shrink: 0; }
+.t-who { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .t-tag {
+  flex-shrink: 0;
   margin-left: auto;
   padding: 0 6px;
   border-radius: 8px;
