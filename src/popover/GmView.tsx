@@ -106,11 +106,6 @@ export function GmView({ states, sheets, onOpenSheet, onUpload, onResolvePersist
     });
   }, [tokens]);
 
-  // Y al revés: elegir aquí selecciona su token en el mapa
-  const selectToken = (id: string | undefined) => {
-    if (inOwlbear && id) OBR.player.select([id]).catch(() => undefined);
-  };
-
   let target: Target | null = null;
   if (sel?.kind === "pc" && states[sel.id]) target = { kind: "pc", state: states[sel.id], sheet: sheets[sel.id] };
   if (sel?.kind === "npc") {
@@ -156,10 +151,8 @@ export function GmView({ states, sheets, onOpenSheet, onUpload, onResolvePersist
               dying={s.dying}
               cond={s.cond}
               selected={sel?.kind === "pc" && sel.id === s.id}
-              onClick={() => {
-                setSel({ kind: "pc", id: s.id });
-                selectToken(tokens.find((x) => x.data.characterId === s.id)?.item.id);
-              }}
+              // No se selecciona el token en el mapa: la barra de Owlbear taparía este panel
+              onClick={() => setSel({ kind: "pc", id: s.id })}
             />
           );
         })}
@@ -184,10 +177,7 @@ export function GmView({ states, sheets, onOpenSheet, onUpload, onResolvePersist
               cond={n.state.cond}
               badge={n.state.hidden ? "oculto" : undefined}
               selected={sel?.kind === "npc" && sel.id === n.id}
-              onClick={() => {
-                setSel({ kind: "npc", id: n.id });
-                selectToken(n.id);
-              }}
+              onClick={() => setSel({ kind: "npc", id: n.id })}
             />
           );
         })}
