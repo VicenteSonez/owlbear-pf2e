@@ -1,6 +1,7 @@
 import OBR, { buildImage, buildShape, buildText, type Item } from "@owlbear-rodeo/sdk";
 import { autoLinkCandidate, linkToken, npcToToken, publishPlayer, roomId, tokenData, whenReady } from "../obr";
 import { store } from "../storage";
+import { extrasStore } from "../extras";
 import { watchForUpdates } from "../autoUpdate";
 import { live, needsSheetSync, seedState, syncSheet } from "../live";
 import { combatStore, npcKey, pcKey, type Combat } from "../combat";
@@ -603,7 +604,7 @@ function setupOverlays() {
 // Publica la hoja activa para que el GM pueda abrirla aunque el jugador no abra la extensión
 function publishActive() {
   const c = store.activeCharacter(roomId());
-  publishPlayer(c ? { character: c } : null);
+  publishPlayer(c ? { character: c, extras: extrasStore.get(c.id) } : null);
 }
 
 watchForUpdates();

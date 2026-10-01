@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import OBR from "@owlbear-rodeo/sdk";
-import { fmtMod, type Character } from "../pathbuilder";
+import { fmtMod, parsePathbuilder, type Character } from "../pathbuilder";
 import { Dice3D, evaluate, parseFormula, randomValues, type DiceStyle } from "../dice";
 import { autoLinkCandidate, inOwlbear, linkToken, publishPlayer, unlinkToken } from "../obr";
 import { store } from "../storage";
@@ -22,6 +22,14 @@ import type { Target } from "./EffectsPanel";
 import { CombatView } from "./CombatView";
 import { InitPanel, initFormula, type InitOption } from "./Initiative";
 import { useCombatActions } from "./useCombatActions";
+import { extrasStore, useExtrasVersion, type Extras } from "../extras";
+import { SideRail, sidesFor, type Side } from "./side/SideRail";
+import { FeatsPanel } from "./side/FeatsPanel";
+import { InventoryPanel } from "./side/InventoryPanel";
+import { MagicPanel } from "./side/MagicPanel";
+import { RecipesPanel } from "./side/RecipesPanel";
+import { PetPanel } from "./side/PetPanel";
+import type { SideProps } from "./side/types";
 
 const dice = new Dice3D();
 
@@ -84,6 +92,7 @@ export function App() {
   // Hoja de otro PJ abierta por el GM desde la pestaña GM
   const [viewId, setViewId] = useState<string | null>(null);
   const party = useParty(session.ready && isGm);
+  const extrasVersion = useExtrasVersion();
 
   useEffect(() => {
     if (!session.ready) return;
@@ -123,6 +132,23 @@ export function App() {
   const token = useLinkedToken(character?.id);
   const ownsCharacter = !!character && characters.some((c) => c.id === character.id);
 
+  // Pestañas laterales: las anotaciones son del dueño; el GM ve las que publica cada jugador
+  const [side, setSide] = useState<Side | null>(null);
+  useEffect(() => setSide(null), [character?.id]);
+  const publishedExtras = useMemo(() => {
+    const map: Record<string, Extras> = {};
+    for (const p of party) {
+      const m = playerMeta(p);
+      if (m?.extras) map[m.character.id] = m.extras;
+    }
+    return map;
+  }, [party]);
+  const extras: Extras = useMemo(
+    () => (character ? (ownsCharacter ? extrasStore.get(character.id) : (publishedExtras[character.id] ?? {})) : {}),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [character?.id, ownsCharacter, publishedExtras, extrasVersion],
+  );
+
   // Siembra en la sala el estado de la hoja activa y lo mantiene al día si se reimporta
   useEffect(() => {
     if (!liveReady || !session.ready) return;
@@ -139,10 +165,12 @@ export function App() {
     }
   }, [liveReady, session.ready, characters, activeId, states, session.me.id, session.me.name]);
 
-  // Publica la hoja propia para que el GM pueda abrirla
+  // Publica la hoja propia (y sus anotaciones) para que el GM pueda abrirla
   useEffect(() => {
-    if (own) publishPlayer({ character: own });
-  }, [own]);
+    if (!own) return;
+    const t = window.setTimeout(() => publishPlayer({ character: own, extras: extrasStore.get(own.id) }), 600);
+    return () => window.clearTimeout(t);
+  }, [own, extrasVersion]);
 
   useEffect(() => {
     if (inOwlbear && session.ready) OBR.action.setWidth(view === "gm" ? WIDTH_GM : WIDTH_SHEET).catch(() => undefined);
@@ -269,8 +297,9 @@ export function App() {
       holdOverlay: () => window.clearTimeout(hideTimer.current),
       dice,
       live,
+      importRaw: (raw: unknown) => onImported(parsePathbuilder(raw), raw),
     };
-  }, [showOverlay]);
+  }, [showOverlay, onImported]);
 
   const changeDiceStyle = useCallback((s: DiceStyle) => {
     setDiceStyle(s);
@@ -512,8 +541,29 @@ export function App() {
         )}
         {character && !state && <section className="vitals muted">Preparando la hoja en la sala…</section>}
 
-        <div className="sheet-body">
-          <div className="sheet-scroll">
+        <div className={`sheet-body ${character ? "with-rail" : ""}`}>
+          {character && <SideRail character={character} side={side} onSide={setSide} />}
+          {character && side && sidesFor(character).some((x) => x.id === side) && (() => {
+            const sp: SideProps = {
+              character,
+              state,
+              extras,
+              canEditExtras: ownsCharacter,
+              canEdit,
+              updateExtras: (fn) => extrasStore.update(character.id, fn),
+              patch: onPatch,
+            };
+            return (
+              <div className="side-scroll">
+                {side === "feats" && <FeatsPanel {...sp} />}
+                {side === "inventory" && <InventoryPanel {...sp} />}
+                {side === "magic" && <MagicPanel {...sp} onRoll={roll} />}
+                {side === "recipes" && <RecipesPanel {...sp} />}
+                {side === "pet" && <PetPanel {...sp} onRoll={roll} />}
+              </div>
+            );
+          })()}
+          <div className={side ? "sheet-scroll hidden" : "sheet-scroll"}>
             <section className="roller">
               <div className="dice-row">
                 {[4, 6, 8, 10, 12, 20].map((s) => (

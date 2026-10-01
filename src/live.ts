@@ -29,8 +29,26 @@ export interface PcState extends Vitals {
   shield?: ShieldState;
   // Iniciativa del combate en curso (se borra al terminar el combate)
   init?: InitRoll;
+  // Recursos que el GM también puede tocar: foco, espacios de conjuro, alquimia
+  res?: Resources;
+  // Mascota o compañero de otro PJ: no tira iniciativa propia
+  pet?: { parent: string; index: number; type: string };
   t: number;
 }
+
+export interface Resources {
+  // Sin valor = al máximo
+  focus?: number;
+  // "<lanzador>:<rango>" → espontáneo: espacios gastados; preparado: máscara de bits de espacios usados
+  used?: Record<string, number>;
+  // Alquimia avanzada y viales versátiles (máximo sin valor = el predeterminado de la clase)
+  aa?: number;
+  aaMax?: number | null;
+  vv?: number;
+  vvMax?: number | null;
+}
+
+export const petStateId = (charId: string, index: number) => `${charId}~p${index}`;
 
 export function seedState(c: Character, owner?: { id: string; name: string }, prev?: { hp: number; temp: number }): PcState {
   return {

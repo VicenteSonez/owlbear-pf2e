@@ -51,11 +51,40 @@ export interface SpellCaster {
   type: string;
   attack: number;
   dc: number;
+  // Repertorio (espontáneos) o lista de conjuros conocidos/libro (preparados)
   spells: { rank: number; names: string[] }[];
+  innate?: boolean;
+  // Espacios por día: el índice 0 son los trucos
+  perDay?: number[];
+  // Preparados: qué conjuro ocupa cada espacio (un nombre repetido = varios espacios)
+  prepared?: { rank: number; names: string[] }[];
+}
+
+export interface Feat {
+  name: string;
+  // Tipo tal como lo da Pathbuilder: "Class Feat", "Skill Feat", "Heritage"…
+  type: string;
+  level: number | null;
+  // Dote del arquetipo libre (Free Archetype)
+  free?: boolean;
+}
+
+export interface Item {
+  name: string;
+  qty: number;
+  // Nombre del contenedor (mochila, bolsa…) o "Equipado" para armas y armadura
+  container?: string;
+}
+
+export interface Pet {
+  name: string;
+  // "Animal Companion", "Familiar", "Eidolon"…
+  type: string;
+  animal?: string;
 }
 
 // Sube este número cuando el lector cambie: las hojas guardadas se vuelven a leer solas
-export const PARSER_VERSION = 2;
+export const PARSER_VERSION = 3;
 
 export interface Character {
   parserVersion?: number;
@@ -83,6 +112,16 @@ export interface Character {
   skills: Stat[];
   weapons: Weapon[];
   casters: SpellCaster[];
+  // Puntos de foco máximos (uno por conjuro de foco, hasta 3)
+  focusMax?: number;
+  feats?: Feat[];
+  // Rasgos de clase y especiales sin nivel
+  specials?: string[];
+  items?: Item[];
+  money?: { cp: number; sp: number; gp: number; pp: number };
+  formulas?: string[];
+  alchemy?: { alchemist: boolean; advanced: boolean; quick: boolean };
+  pets?: Pet[];
   importedAt: number;
 }
 
@@ -318,6 +357,9 @@ export function parsePathbuilder(raw: unknown): Character {
       const spells = (Array.isArray(c.spells) ? c.spells : [])
         .map((s: Json) => ({ rank: num(s.spellLevel), names: (s.list ?? []).map(String) }))
         .filter((s: { names: string[] }) => s.names.length);
+      const prepared = (Array.isArray(c.prepared) ? c.prepared : [])
+        .map((s: Json) => ({ rank: num(s.spellLevel), names: (s.list ?? []).map(String) }))
+        .filter((s: { names: string[] }) => s.names.length);
       return {
         name: String(c.name ?? "Lanzador"),
         tradition: String(c.magicTradition ?? ""),
@@ -325,12 +367,16 @@ export function parsePathbuilder(raw: unknown): Character {
         attack: base + modBonus(mods, "Spell Attack"),
         dc: 10 + base + modBonus(mods, "Spell DC"),
         spells,
+        innate: !!c.innate,
+        perDay: Array.isArray(c.perDay) ? c.perDay.map((n: unknown) => num(n)) : undefined,
+        prepared,
       };
     },
   );
 
   // Conjuros de foco: { divine: { wis: { proficiency, focusCantrips, focusSpells } } }
   const focus: Json = b.focus ?? {};
+  let focusSpellCount = 0;
   for (const [tradition, byAb] of Object.entries(focus)) {
     if (!byAb || typeof byAb !== "object") continue;
     for (const [abKey, f] of Object.entries(byAb as Json)) {
@@ -341,6 +387,7 @@ export function parsePathbuilder(raw: unknown): Character {
       const cantrips: string[] = (fj.focusCantrips ?? []).map(String);
       const focusSpells: string[] = (fj.focusSpells ?? []).map(String);
       if (!cantrips.length && !focusSpells.length) continue;
+      focusSpellCount += focusSpells.length;
       casters.push({
         name: `Foco (${tradition})`,
         tradition,
@@ -354,6 +401,61 @@ export function parsePathbuilder(raw: unknown): Character {
       });
     }
   }
+
+  // Dotes: [nombre, ?, tipo, nivel, "Free Archetype 2", …]. Pathbuilder a veces las repite.
+  const feats: Feat[] = [];
+  for (const f of Array.isArray(b.feats) ? b.feats : []) {
+    if (!Array.isArray(f) || !f[0]) continue;
+    const feat: Feat = {
+      name: String(f[0]),
+      type: String(f[2] ?? "Feat"),
+      level: f[3] === null || f[3] === undefined ? null : num(f[3]),
+      free: /free archetype/i.test(String(f[4] ?? "")) || undefined,
+    };
+    if (!feats.some((x) => x.name === feat.name && x.type === feat.type && x.level === feat.level)) feats.push(feat);
+  }
+  // Los especiales que ya son dotes (o sentidos) no se repiten
+  const featNames = new Set(feats.map((f) => f.name.toLowerCase()));
+  const specials = (Array.isArray(b.specials) ? b.specials.map(String) : []).filter(
+    (s: string) => !featNames.has(s.toLowerCase()) && !SENSES.some(([en]) => en.toLowerCase() === s.toLowerCase()),
+  );
+
+  // Inventario: [nombre, cantidad, idContenedor?, "Invested"]. "Invested" viene en todo, así que se ignora.
+  const containers: Json = b.equipmentContainers ?? {};
+  const items: Item[] = [
+    ...(Array.isArray(b.weapons) ? b.weapons : []).map((w: Json) => ({
+      name: String(w.display || w.name || "Arma"),
+      qty: Math.max(1, num(w.qty, 1)),
+      container: "Equipado",
+    })),
+    ...(Array.isArray(b.armor) ? b.armor : []).map((a: Json) => ({
+      name: String(a.display || a.name || "Armadura"),
+      qty: Math.max(1, num(a.qty, 1)),
+      container: "Equipado",
+    })),
+  ];
+  for (const e of Array.isArray(b.equipment) ? b.equipment : []) {
+    if (!Array.isArray(e) || !e[0]) continue;
+    const cid = typeof e[2] === "string" && containers[e[2]] ? e[2] : undefined;
+    items.push({ name: String(e[0]), qty: num(e[1], 1), container: cid ? String(containers[cid].containerName ?? "Contenedor") : undefined });
+  }
+
+  const money: Json = b.money ?? {};
+  const formulas = [
+    ...new Set<string>((Array.isArray(b.formula) ? b.formula : []).flatMap((f: Json) => (Array.isArray(f?.known) ? f.known.map(String) : []))),
+  ];
+  const specialsLower = (Array.isArray(b.specials) ? b.specials : []).map((x: unknown) => String(x).toLowerCase());
+  const pets: Pet[] = [
+    ...(Array.isArray(b.pets) ? b.pets : []).map((p: Json) => ({
+      name: String(p.name || p.animal || "Mascota"),
+      type: String(p.type || "Mascota"),
+      animal: p.animal ? String(p.animal) : undefined,
+    })),
+    ...(Array.isArray(b.familiars) ? b.familiars : []).map((p: Json) => ({
+      name: String(p.name || "Familiar"),
+      type: String(p.type || "Familiar"),
+    })),
+  ];
 
   const keyAb = (String(b.keyability ?? "str").slice(0, 3) as Ability) || "str";
   const name = String(b.name ?? "Personaje");
@@ -385,6 +487,18 @@ export function parsePathbuilder(raw: unknown): Character {
     skills: [...skills, ...lores],
     weapons,
     casters,
+    focusMax: focusSpellCount ? Math.min(3, focusSpellCount) : undefined,
+    feats,
+    specials,
+    items,
+    money: { cp: num(money.cp), sp: num(money.sp), gp: num(money.gp), pp: num(money.pp) },
+    formulas,
+    alchemy: {
+      alchemist: /alchemist/i.test(className),
+      advanced: specialsLower.includes("advanced alchemy"),
+      quick: specialsLower.includes("quick alchemy") || specialsLower.includes("versatile vials"),
+    },
+    pets,
     importedAt: Date.now(),
   };
 }

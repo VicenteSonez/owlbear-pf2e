@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Owlbear Rodeo extension (SDK v3) for Pathfinder 2e. It imports Pathbuilder 2e JSON sheets, rolls 3D dice with the bonuses already added, applies PF2e conditions and rules, and keeps HP/AC in sync with map tokens. Stack: React 19, Vite 8, TypeScript. All UI text and code comments are in **Spanish**; keep them that way.
 
-The pending feature list lives in `Prompts pendientes.docx`, which is not committed. The work is split into phases: 1 dice ✅, 2 rules/sheet/GM tab ✅, 3 combat/initiative ✅, 4 side tabs (Dotes, Inventario, Magia, Recetas, Mascota), 5 map VFX.
+The pending feature list lives in `Prompts pendientes.docx`, which is not committed. The work is split into phases: 1 dice ✅, 2 rules/sheet/GM tab ✅, 3 combat/initiative ✅, 4 side tabs (Dotes, Inventario, Magia, Recetas, Mascota) ✅, 5 map VFX.
 
 ## Commands
 
@@ -54,6 +54,10 @@ There are four Vite entry pages, each its own Owlbear iframe:
 - **Token link / NPC state**: scene item metadata (`META_TOKEN`, `TokenData` in `src/shared.ts`).
   - PC tokens hold only `{kind:"pc", characterId, ownerId}`; their numbers come from live state.
   - NPC tokens hold their own HP/AC/cond. Read them through `npcState()` and write through `patchNpc()`.
+- **Side tabs** (`src/popover/side/`: Dotes, Inventario, Magia, Recetas, Mascota) split their data by who can edit it:
+  - Resources the GM can also change (focus points, spent slots, Advanced Alchemy, Versatile Vials) go in `PcState.res`. Slot keys are `"<caster>:<rank>"`: a spent count for spontaneous casters, a bitmask for prepared ones.
+  - The owner's notes (quantities, invested, money, renamed entries, feat notes, pet modifiers) go in `Extras` (`src/extras.ts`, localStorage `pf2.extras.<charId>`). They're published with the sheet in player metadata, so the GM sees them read-only.
+  - Pets get their own `PcState` (`petStateId()`, `pet` field) to reuse HP bars, the token editor and the GM panel. They're left out of initiative.
 - **Rolls**: sent with `OBR.broadcast` on `CHANNEL_ROLL` (destination ALL). `visibleEntry()` hides secret rolls from non-GMs. The log and toasts are kept per browser.
 - **Combat** (`src/combat.ts`):
   - The `Combat` object (round, current turn, NPC combatants, excluded PCs) lives in one room key, `META_COMBAT`, and **only the GM writes it**.

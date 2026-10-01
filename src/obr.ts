@@ -32,7 +32,7 @@ export async function findTokenFor(characterId: string): Promise<Item | undefine
 
 // Vincula una hoja a un token y desvincula cualquier otro token de la escena con esa hoja.
 // El token solo guarda el vínculo: PG, condiciones y demás viven en la sala.
-export async function linkToken(itemId: string, c: Character, ownerId?: string) {
+export async function linkToken(itemId: string, c: Pick<Character, "id" | "name">, ownerId?: string) {
   const owner = ownerId ?? (await OBR.player.getId());
   const previous = await OBR.scene.items.getItems(
     (i) => i.id !== itemId && (i.metadata[META_TOKEN] as TokenData | undefined)?.characterId === c.id,

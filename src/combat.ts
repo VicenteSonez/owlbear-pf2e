@@ -73,7 +73,8 @@ const TB_PC_WINS = 2;
 export function combatEntries(c: Combat, states: Record<string, PcState>): Entry[] {
   const list: Entry[] = [];
   for (const s of Object.values(states)) {
-    if (c.excluded.includes(s.id)) continue;
+    // Las mascotas actúan en el turno de su PJ
+    if (c.excluded.includes(s.id) || s.pet) continue;
     const init = s.init ?? null;
     list.push({
       key: pcKey(s.id),

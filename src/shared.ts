@@ -1,5 +1,6 @@
 import type { Character } from "./pathbuilder";
 import type { Conditions, Degree } from "./rules";
+import type { Extras } from "./extras";
 
 export const ID = "cl.nacho.pf2e-sheets";
 export const META_TOKEN = `${ID}/token`;
@@ -66,6 +67,8 @@ export interface VitalState {
 // Lo que cada jugador publica en su metadata para que el GM pueda abrir su hoja.
 export interface PlayerMeta {
   character: Character;
+  // Anotaciones de las pestañas laterales (inventario, recetas, notas…)
+  extras?: Extras;
 }
 
 export interface RollEntry {
