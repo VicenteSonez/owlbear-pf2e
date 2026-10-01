@@ -95,6 +95,8 @@ float segDist(vec2 q, vec2 a, vec2 b) {
   float h = clamp(dot(pa, ba) / max(dot(ba, ba), 0.0001), 0.0, 1.0);
   return length(pa - ba * h);
 }
+// Se apaga cerca del borde de la zona dibujada, para que no se note el cuadrado
+float edgeFade(vec2 q) { return 1.0 - smoothstep(cells * 0.4, cells * 0.5, max(abs(q.x), abs(q.y))); }
 half4 col4(vec3 c, float a) {
   a = clamp(a, 0.0, 1.0);
   return half4(c * a, a);
@@ -128,7 +130,7 @@ half4 main(float2 coord) {
   }
   float glow = exp(-length(q) / (r * 1.1)) * 0.35 * sin(p * 3.14159);
   a = max(a, glow);
-  return col4(vec3(0.35, 1.0, 0.45), a);
+  return col4(vec3(0.35, 1.0, 0.45), a * edgeFade(q));
 }`;
 
 // Cortes rojos que se dibujan rápido y gotas de sangre que salpican
@@ -163,7 +165,7 @@ half4 main(float2 coord) {
     a = max(a, drop * (1.0 - t) * step(0.001, t));
   }
   vec3 c = mix(vec3(0.8, 0.03, 0.06), vec3(1.0, 0.75, 0.7), core);
-  return col4(c, a);
+  return col4(c, (a) * edgeFade(q));
 }`;
 
 // Un escudo que aparece de golpe, crece un poco y se desvanece
@@ -184,7 +186,7 @@ half4 main(float2 coord) {
   float fade = 1.0 - smoothstep(0.45, 1.0, p);
   float flash = 1.0 - smoothstep(0.0, 0.2, p);
   float a = (max(max(fill, edge), boss * 0.8) + flash * fill * 2.0) * fade;
-  return col4(vec3(0.78, 0.9, 1.0), a);
+  return col4(vec3(0.78, 0.9, 1.0), a * edgeFade(q));
 }`;
 
 // Círculo rúnico que gira y chispas en espiral
@@ -217,7 +219,7 @@ half4 main(float2 coord) {
     sparks = max(sparks, g * sin(t * 3.14159) * step(0.001, t));
   }
   vec3 c = mix(vec3(0.68, 0.45, 1.0), vec3(0.6, 1.0, 1.0), sparks);
-  return col4(c, max(a, sparks));
+  return col4(c, (max(a, sparks)) * edgeFade(q));
 }`;
 
 // Estrellas dando vueltas sobre la cabeza, como al quedar noqueado
@@ -240,7 +242,7 @@ half4 main(float2 coord) {
     float star = 1.0 - smoothstep(shape * 0.85, shape, length(d));
     a = max(a, star * (0.65 + 0.35 * depth));
   }
-  return col4(vec3(1.0, 0.86, 0.25), a * show);
+  return col4(vec3(1.0, 0.86, 0.25), a * show * edgeFade(q));
 }`;
 
 // ---------- Ataques: blancos, minimalistas ----------
@@ -268,7 +270,7 @@ half4 main(float2 coord) {
     float on = step(0.001, t) * (1.0 - smoothstep(0.75, 1.0, t));
     a = max(a, arc * span * on);
   }
-  return col4(vec3(1.0), a);
+  return col4(vec3(1.0), (a) * edgeFade(q));
 }`;
 
 // Estocada: una punta fina que sale hacia la casilla y vuelve
@@ -295,7 +297,7 @@ half4 main(float2 coord) {
     lines = max(lines, (1.0 - smoothstep(0.004, 0.012, sd)) * 0.45 * ext);
   }
   float a = max(max(spike, flash), lines) * (1.0 - smoothstep(0.85, 1.0, p));
-  return col4(vec3(1.0), a);
+  return col4(vec3(1.0), (a) * edgeFade(q));
 }`;
 
 // Impacto sólido: onda que se expande, rayos y destello en el centro
@@ -310,7 +312,7 @@ half4 main(float2 coord) {
   float rays = pow(abs(cos(ang * 4.0)), 24.0) * step(R * 0.5, length(q)) * step(length(q), R * 1.25) * (1.0 - smoothstep(0.2, 0.6, t));
   float flash = exp(-length(q) / 0.12) * (1.0 - smoothstep(0.0, 0.35, t));
   float a = max(max(ring * (1.0 - smoothstep(0.6, 1.0, t)), rays), flash);
-  return col4(vec3(1.0), a);
+  return col4(vec3(1.0), (a) * edgeFade(q));
 }`;
 
 // Flecha destellante: un trazo con estela que viaja en línea recta
@@ -335,7 +337,7 @@ half4 main(float2 coord) {
   }
   float glow = exp(-length(v) / 0.14) * 0.9;
   float fade = 1.0 - smoothstep(0.85, 1.0, p);
-  return col4(vec3(1.0), max(max(streak, chev), glow) * fade);
+  return col4(vec3(1.0), (max(max(streak, chev), glow) * fade) * edgeFade(q));
 }`;
 
 // Cortes circulares que giran mientras viajan (dagas y arrojadizas cortantes)
@@ -352,7 +354,7 @@ half4 main(float2 coord) {
   float ring = 1.0 - smoothstep(0.03, 0.06, abs(length(v) - 0.32));
   float trail = exp(-abs(dot(q - c, vec2(-dir.y, dir.x))) / 0.04) * step(dot(q - c, dir), 0.0) * exp(dot(q - c, dir) / 0.6) * 0.35;
   float fade = 1.0 - smoothstep(0.85, 1.0, p);
-  return col4(vec3(1.0), max(ring * arcMask, trail) * fade);
+  return col4(vec3(1.0), (max(ring * arcMask, trail) * fade) * edgeFade(q));
 }`;
 
 // Disparo: fogonazo en la boca y un proyectil veloz
@@ -372,7 +374,7 @@ half4 main(float2 coord) {
   float sd = segDist(q, head - dir * 1.1 * step(0.001, t), head);
   float along = clamp(dot(head - q, dir) / 1.1, 0.0, 1.0);
   float tracer = (1.0 - smoothstep(0.02, 0.045, sd)) * (1.0 - along) * step(0.001, t) * (1.0 - smoothstep(0.85, 1.0, t));
-  return col4(vec3(1.0), max(fl, tracer));
+  return col4(vec3(1.0), (max(fl, tracer)) * edgeFade(q));
 }`;
 
 // Proyectil redondo que viaja ligeramente curvado (bombas, hondas)
@@ -396,7 +398,7 @@ half4 main(float2 coord) {
   float pt = clamp((p - 0.82) / 0.18, 0.0, 1.0);
   float pop = (1.0 - smoothstep(0.02, 0.05, abs(length(q - e) - pt * 0.45))) * step(0.001, pt) * (1.0 - pt);
   float a = max(max(ball * (1.0 - step(0.999, t)), trail * 0.7), pop);
-  return col4(vec3(1.0), a);
+  return col4(vec3(1.0), (a) * edgeFade(q));
 }`;
 
 export const FX_SKSL: Record<FxKind, string> = {
