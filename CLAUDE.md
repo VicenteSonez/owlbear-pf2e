@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Owlbear Rodeo extension (SDK v3) for Pathfinder 2e. It imports Pathbuilder 2e JSON sheets, rolls 3D dice with the bonuses already added, applies PF2e conditions and rules, and keeps HP/AC in sync with map tokens. Stack: React 19, Vite 8, TypeScript. All UI text and code comments are in **Spanish**; keep them that way.
 
-The pending feature list lives in `Prompts pendientes.docx`, which is not committed. The work is split into phases: 1 dice ✅, 2 rules/sheet/GM tab ✅, 3 combat/initiative ✅, 4 side tabs (Dotes, Inventario, Magia, Recetas, Mascota) ✅, 5 map VFX.
+The pending feature list lives in `Prompts pendientes.docx`, which is not committed. The work is split into phases: 1 dice ✅, 2 rules/sheet/GM tab ✅, 3 combat/initiative ✅, 4 side tabs (Dotes, Inventario, Magia, Recetas, Mascota) ✅, 5 map VFX ✅.
 
 ## Commands
 
@@ -87,6 +87,19 @@ The UI shows values that already include conditions.
   - Dice scale is capped at 8. Above that the physics returns face 0 or -1, and roll values fall back to random.
 - `src/obr.ts`: OBR helpers (`inOwlbear`, `whenReady`, token link/unlink, `findTokenFor`).
 - `src/background/main.ts` draws token overlays as **local** items: HP bar, AC hexagon and a condition icon row. Icons come from `public/icons/cond/*.svg`. Overlays redraw on both scene changes and live-state changes.
+
+### Map effects (VFX)
+
+- `src/fx.ts`: one SkSL shader per effect (heal, damage, shield, spell, stars, plus 7 white attack effects) and their durations.
+  - The shaders draw in cell units around the region's center, using uniforms `p` (progress 0..1), `cells` (region side), `dir` and `r` (token radius).
+  - To check a shader without Owlbear, compile and render it with `canvaskit-wasm` (`CK.RuntimeEffect.Make`).
+- `src/background/fx.ts` adds them as local `EFFECT` items and advances `p` with a ~30 fps timer.
+  - Owlbear's `time` uniform is Unix seconds, too large for a GPU float to animate with.
+  - In Owlbear, a STANDALONE effect's `position` is its top-left corner.
+- Triggers:
+  - Heal, damage, shield and stars are derived on **each client** by comparing PC/pet state (`live`) and NPC token state with the previous snapshot. No messages are needed.
+  - Weapon and spell attacks travel in the roll itself (`RollEntry.charId` + `fx`).
+  - Players don't see effects on tokens that are hidden from them.
 
 ## Conventions
 
