@@ -1,9 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import OBR, { type Item, type Player } from "@owlbear-rodeo/sdk";
-import type { Character } from "../pathbuilder";
-import { inOwlbear, linkToken, patchToken, publishPlayer, roomId, tokenData, whenReady } from "../obr";
+import { inOwlbear, roomId, tokenData, whenReady } from "../obr";
 import { store } from "../storage";
-import { CHANNEL_ROLL, META_PLAYER, visibleEntry, type PlayerMeta, type RollEntry, type VitalState } from "../shared";
+import { CHANNEL_ROLL, META_PLAYER, visibleEntry, type PlayerMeta, type RollEntry } from "../shared";
 
 export interface Me {
   id: string;
@@ -18,7 +17,8 @@ export interface Session {
   room: string;
 }
 
-const LOCAL_ME: Me = { id: "local", name: "Local", color: "#e8622c", role: "PLAYER" };
+// En modo local de desarrollo se actúa como GM para poder probar la pestaña GM
+const LOCAL_ME: Me = { id: "local", name: "Local", color: "#e8622c", role: import.meta.env.DEV ? "GM" : "PLAYER" };
 
 export function useSession(): Session {
   const [s, setS] = useState<Session>({ ready: false, me: LOCAL_ME, room: "local" });
@@ -57,113 +57,32 @@ export function useParty(enabled: boolean): Player[] {
 
 export const playerMeta = (p: Player) => p.metadata[META_PLAYER] as PlayerMeta | undefined;
 
-const sameVitals = (a?: VitalState, b?: VitalState) =>
-  !!a && !!b && a.hp === b.hp && a.temp === b.temp && a.ac === b.ac;
-
-/**
- * HP/CA de un personaje. Si hay un token vinculado en la escena, el token manda
- * (salvo que el cambio local sea más reciente, p. ej. al entrar a una escena nueva).
- * mode "own": la hoja es del jugador actual (se guarda y se publica).
- * mode "remote": el GM mirando la hoja de otro (solo edita si hay token).
- */
-export function useVitals(c: Character | undefined, mode: "own" | "remote", remote?: VitalState) {
-  const [vitals, setVitals] = useState<VitalState | undefined>();
+// Token de la escena vinculado a una hoja (si hay)
+export function useLinkedToken(characterId: string | undefined): Item | undefined {
   const [token, setToken] = useState<Item | undefined>();
-  const ref = useRef<VitalState | undefined>(undefined);
-  const tokenRef = useRef<Item | undefined>(undefined);
-
-  const set = useCallback(
-    (v: VitalState, persist: boolean) => {
-      ref.current = v;
-      setVitals(v);
-      if (persist && mode === "own" && c) {
-        store.setVitals(c.id, v);
-        publishPlayer({ character: c, vitals: v });
-      }
-    },
-    [c, mode],
-  );
-
   useEffect(() => {
-    if (!c) return;
-    const initial =
-      mode === "own" ? store.vitals(c) : (remote ?? { hp: c.maxHp, temp: 0, ac: c.ac, updatedAt: 0 });
-    set(initial, false);
-    if (mode === "own") publishPlayer({ character: c, vitals: initial });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [c?.id, c?.importedAt, mode]);
-
-  // El GM mirando a otro jugador sin token: sigue lo que publique el jugador
-  useEffect(() => {
-    if (mode === "remote" && remote && !tokenRef.current && !sameVitals(remote, ref.current)) set(remote, false);
-  }, [mode, remote, set]);
-
-  useEffect(() => {
-    if (!c || !inOwlbear) return;
+    setToken(undefined);
+    if (!characterId || !inOwlbear) return;
     let alive = true;
-    const check = async (items?: Item[]) => {
+    const find = (items: Item[]) => items.find((i) => tokenData(i)?.characterId === characterId);
+    const load = async () => {
       if (!(await OBR.scene.isReady())) {
-        tokenRef.current = undefined;
         if (alive) setToken(undefined);
         return;
       }
-      const list = items ?? (await OBR.scene.items.getItems());
-      const t = list.find((i) => tokenData(i)?.characterId === c.id);
-      tokenRef.current = t;
-      if (!alive) return;
-      setToken(t);
-      if (!t) return;
-      const td = tokenData(t)!;
-      const cur = ref.current;
-      if (mode === "own") {
-        if (cur && cur.updatedAt > td.updatedAt && !sameVitals(cur, td as VitalState)) {
-          await patchToken(t.id, { hp: cur.hp, temp: cur.temp, ac: cur.ac, maxHp: c.maxHp, baseAc: c.ac });
-          return;
-        }
-        // Reimportaste la hoja (subiste de nivel): actualiza máximos del token
-        if (td.maxHp !== c.maxHp || td.baseAc !== c.ac || td.name !== c.name) {
-          const acDiff = td.ac - td.baseAc;
-          await patchToken(t.id, { maxHp: c.maxHp, baseAc: c.ac, ac: c.ac + acDiff, hp: Math.min(td.hp, c.maxHp), name: c.name });
-          return;
-        }
-      }
-      const next: VitalState = { hp: td.hp, temp: td.temp, ac: td.ac, updatedAt: td.updatedAt };
-      if (!sameVitals(next, cur)) set(next, true);
-      else if (cur) ref.current = { ...cur, updatedAt: Math.max(cur.updatedAt, td.updatedAt) };
+      const items = await OBR.scene.items.getItems();
+      if (alive) setToken(find(items));
     };
-    check();
-    const offItems = OBR.scene.items.onChange((items) => check(items));
-    const offReady = OBR.scene.onReadyChange(() => check());
+    load();
+    const offItems = OBR.scene.items.onChange((items) => setToken(find(items)));
+    const offReady = OBR.scene.onReadyChange(() => load());
     return () => {
       alive = false;
       offItems();
       offReady();
     };
-  }, [c, mode, set]);
-
-  const canEdit = mode === "own" || !!token;
-
-  const update = useCallback(
-    (patch: Partial<Omit<VitalState, "updatedAt">>) => {
-      const cur = ref.current;
-      if (!cur || !c) return;
-      if (mode === "remote" && !tokenRef.current) return;
-      const next = { ...cur, ...patch, updatedAt: Date.now() };
-      set(next, true);
-      if (tokenRef.current) patchToken(tokenRef.current.id, patch);
-    },
-    [c, mode, set],
-  );
-
-  const link = useCallback(
-    async (itemId: string) => {
-      if (!c || !ref.current) return;
-      await linkToken(itemId, c, ref.current);
-    },
-    [c],
-  );
-
-  return { vitals, token, update, link, canEdit };
+  }, [characterId]);
+  return token;
 }
 
 export function useRollLog(session: Session) {

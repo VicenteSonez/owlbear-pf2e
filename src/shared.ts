@@ -1,4 +1,5 @@
 import type { Character } from "./pathbuilder";
+import type { Conditions, Degree } from "./rules";
 
 export const ID = "cl.nacho.pf2e-sheets";
 export const META_TOKEN = `${ID}/token`;
@@ -8,20 +9,51 @@ export const OVERLAY_PREFIX = `${ID}-overlay`;
 export const TOAST_POPOVER = `${ID}/toasts`;
 export const TOAST_KEY = "pf2.toasts";
 
-// Vive en la metadata del token: es la fuente de verdad de HP/CA cuando hay token vinculado.
+// Metadata del token. Para un PJ es solo el vínculo con su hoja (el estado vive en la sala);
+// para un PNJ guarda su estado completo, porque los PNJ son de cada escena.
 export interface TokenData {
   kind: "pc" | "npc";
+  name: string;
+  // PJ
   characterId?: string;
   ownerId?: string;
+  // PNJ
+  hp?: number;
+  maxHp?: number;
+  temp?: number;
+  baseAc?: number;
+  acAdj?: number;
+  cond?: Conditions;
+  // Oculta las estadísticas del PNJ a los jugadores
+  hidden?: boolean;
+  // Versiones anteriores guardaban la CA final aquí
+  ac?: number;
+  updatedAt?: number;
+}
+
+export interface NpcState {
   name: string;
   hp: number;
   maxHp: number;
   temp: number;
-  ac: number;
   baseAc: number;
-  // Solo NPC: oculta las estadísticas a los jugadores
-  hidden?: boolean;
-  updatedAt: number;
+  acAdj: number;
+  cond: Conditions;
+  hidden: boolean;
+}
+
+export function npcState(d: TokenData): NpcState {
+  const baseAc = d.baseAc ?? d.ac ?? 10;
+  return {
+    name: d.name,
+    hp: d.hp ?? 0,
+    maxHp: d.maxHp ?? 1,
+    temp: d.temp ?? 0,
+    baseAc,
+    acAdj: d.acAdj ?? (d.ac !== undefined && d.baseAc !== undefined ? d.ac - d.baseAc : 0),
+    cond: d.cond ?? {},
+    hidden: !!d.hidden,
+  };
 }
 
 export interface VitalState {
@@ -31,10 +63,9 @@ export interface VitalState {
   updatedAt: number;
 }
 
-// Lo que cada jugador publica en su metadata para que el GM vea al grupo.
+// Lo que cada jugador publica en su metadata para que el GM pueda abrir su hoja.
 export interface PlayerMeta {
   character: Character;
-  vitals: VitalState;
 }
 
 export interface RollEntry {
@@ -48,10 +79,15 @@ export interface RollEntry {
   formula: string;
   detail: string;
   total: number;
-  kind: "check" | "damage" | "free";
+  kind: "check" | "damage" | "free" | "flat";
   nat?: 1 | 20;
   crit?: boolean;
   secret?: boolean;
+  // Condiciones que modificaron la tirada, p. ej. "Asustado −2"
+  notes?: string;
+  // Tiradas planas: CD y resultado
+  dc?: number;
+  degree?: Degree;
   // Color de los dados de quien tiró (se ve en la tarjeta)
   diceColor?: string;
 }

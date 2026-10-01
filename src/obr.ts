@@ -1,6 +1,6 @@
 import OBR, { type Item } from "@owlbear-rodeo/sdk";
 import type { Character } from "./pathbuilder";
-import { META_PLAYER, META_TOKEN, type PlayerMeta, type TokenData, type VitalState } from "./shared";
+import { META_PLAYER, META_TOKEN, npcState, type NpcState, type PlayerMeta, type TokenData } from "./shared";
 
 // Fuera de Owlbear (abriendo la página directamente) funciona en modo local de prueba.
 export const inOwlbear = window.self !== window.top;
@@ -30,24 +30,10 @@ export async function findTokenFor(characterId: string): Promise<Item | undefine
   return items[0];
 }
 
-export function tokenFromCharacter(c: Character, v: VitalState, ownerId: string, name: string): TokenData {
-  return {
-    kind: "pc",
-    characterId: c.id,
-    ownerId,
-    name,
-    hp: v.hp,
-    maxHp: c.maxHp,
-    temp: v.temp,
-    ac: v.ac,
-    baseAc: c.ac,
-    updatedAt: Date.now(),
-  };
-}
-
-// Vincula una hoja a un token y desvincula cualquier otro token de la escena con esa hoja
-export async function linkToken(itemId: string, c: Character, v: VitalState) {
-  const ownerId = await OBR.player.getId();
+// Vincula una hoja a un token y desvincula cualquier otro token de la escena con esa hoja.
+// El token solo guarda el vínculo: PG, condiciones y demás viven en la sala.
+export async function linkToken(itemId: string, c: Character, ownerId?: string) {
+  const owner = ownerId ?? (await OBR.player.getId());
   const previous = await OBR.scene.items.getItems(
     (i) => i.id !== itemId && (i.metadata[META_TOKEN] as TokenData | undefined)?.characterId === c.id,
   );
@@ -56,17 +42,34 @@ export async function linkToken(itemId: string, c: Character, v: VitalState) {
       for (const d of drafts) delete d.metadata[META_TOKEN];
     });
   }
+  const data: TokenData = { kind: "pc", characterId: c.id, ownerId: owner, name: c.name };
   await OBR.scene.items.updateItems([itemId], (drafts) => {
-    for (const d of drafts) d.metadata[META_TOKEN] = tokenFromCharacter(c, v, ownerId, c.name);
+    for (const d of drafts) d.metadata[META_TOKEN] = data;
   });
 }
 
-export async function patchToken(itemId: string, patch: Partial<TokenData>) {
+export function npcToToken(n: NpcState): TokenData {
+  return {
+    kind: "npc",
+    name: n.name,
+    hp: n.hp,
+    maxHp: n.maxHp,
+    temp: n.temp,
+    baseAc: n.baseAc,
+    acAdj: n.acAdj,
+    cond: n.cond,
+    hidden: n.hidden,
+    updatedAt: Date.now(),
+  };
+}
+
+// Modifica el estado de un PNJ guardado en su token
+export async function patchNpc(itemId: string, fn: (n: NpcState) => NpcState) {
   await OBR.scene.items.updateItems([itemId], (drafts) => {
     for (const d of drafts) {
       const cur = d.metadata[META_TOKEN] as TokenData | undefined;
-      if (!cur) continue;
-      d.metadata[META_TOKEN] = { ...cur, ...patch, updatedAt: Date.now() };
+      if (cur?.kind !== "npc") continue;
+      d.metadata[META_TOKEN] = npcToToken(fn(npcState(cur)));
     }
   });
 }

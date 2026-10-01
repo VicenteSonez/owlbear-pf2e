@@ -4,12 +4,15 @@ import { parsePathbuilder, type Character } from "../pathbuilder";
 interface Props {
   characters: Character[];
   activeId: string | null;
-  onImported: (c: Character) => void;
+  // "gm": el GM sube la hoja de un PJ que controla él o de un jugador ausente
+  mode?: "own" | "gm";
+  onImported: (c: Character, raw: unknown) => void;
   onSelect: (id: string) => void;
   onDelete: (id: string) => void;
+  onCancel?: () => void;
 }
 
-export function Importer({ characters, activeId, onImported, onSelect, onDelete }: Props) {
+export function Importer({ characters, activeId, mode = "own", onImported, onSelect, onDelete, onCancel }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [pbId, setPbId] = useState("");
   const [loading, setLoading] = useState(false);
@@ -18,7 +21,7 @@ export function Importer({ characters, activeId, onImported, onSelect, onDelete 
 
   const load = (raw: unknown) => {
     try {
-      onImported(parsePathbuilder(raw));
+      onImported(parsePathbuilder(raw), raw);
       setError(null);
     } catch (e) {
       setError((e as Error).message);
@@ -53,7 +56,15 @@ export function Importer({ characters, activeId, onImported, onSelect, onDelete 
 
   return (
     <section className="importer">
-      <h2>Sube tu hoja de Pathbuilder 2e</h2>
+      <h2>{mode === "gm" ? "Subir la hoja de un PJ" : "Sube tu hoja de Pathbuilder 2e"}</h2>
+      {mode === "gm" && (
+        <p className="muted small">
+          La hoja queda en la lista del GM y su estado se comparte con la sala.{" "}
+          <button className="link-btn" onClick={onCancel}>
+            Volver
+          </button>
+        </p>
+      )}
       <p className="muted small">
         En Pathbuilder: Menú → Export → <b>Export JSON</b>. Descarga el archivo o copia el número de ID.
       </p>
@@ -97,7 +108,7 @@ export function Importer({ characters, activeId, onImported, onSelect, onDelete 
       </button>
       {error && <p className="error">{error}</p>}
 
-      {characters.length > 0 && (
+      {mode === "own" && characters.length > 0 && (
         <>
           <h2>Tus personajes</h2>
           <ul className="char-list">

@@ -1,4 +1,5 @@
 import { readableColor, type RollEntry } from "../shared";
+import { DEGREE_LABEL } from "../rules";
 
 const time = (t: number) =>
   new Date(t).toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -16,10 +17,12 @@ export function LogList({ log, compact }: { log: RollEntry[]; compact?: boolean 
               <span style={{ color: readableColor(e.playerColor) }}>{e.playerName}</span>
               {e.charName && !compact ? <span className="muted"> ({e.charName})</span> : null} — {e.secret ? "🔒 " : ""}
               {e.label}: <b>{hidden ? "enviada al GM" : e.total}</b>
+              {!hidden && e.degree ? <span className={e.degree.includes("success") ? "deg ok" : "deg fail"}> {DEGREE_LABEL[e.degree]}</span> : null}
             </div>
             {!hidden && !compact && (
               <small className="muted">
                 {e.formula}: {e.detail}
+                {e.notes ? ` · ${e.notes}` : ""}
               </small>
             )}
           </li>

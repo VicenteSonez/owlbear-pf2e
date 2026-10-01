@@ -2,6 +2,7 @@ import { StrictMode, useEffect, useState, type CSSProperties } from "react";
 import { createRoot } from "react-dom/client";
 import { store } from "../storage";
 import { TOAST_KEY, type ToastItem } from "../shared";
+import { DEGREE_LABEL } from "../rules";
 import { watchForUpdates } from "../autoUpdate";
 import "../styles.css";
 
@@ -12,11 +13,12 @@ function Card({ item, onDismiss }: { item: ToastItem; onDismiss: () => void }) {
   const e = item.entry;
   const hidden = e.total === null || Number.isNaN(e.total);
   const who = e.charName ? `${e.playerName} · ${e.charName}` : e.playerName;
+  const degree = e.degree ? `${DEGREE_LABEL[e.degree]}${e.dc ? ` · CD ${e.dc}` : ""}` : "";
   const tag =
-    e.nat === 20 ? "20 natural" : e.nat === 1 ? "1 natural" : e.secret ? "🔒 secreta" : e.crit ? "crítico" : "";
+    e.secret ? "🔒 secreta" : degree || (e.nat === 20 ? "20 natural" : e.nat === 1 ? "1 natural" : e.crit ? "crítico" : "");
   return (
     <div
-      className={`toast ${e.nat === 20 ? "nat20" : e.nat === 1 ? "nat1" : ""}`}
+      className={`toast ${e.nat === 20 ? "nat20" : e.nat === 1 ? "nat1" : ""} ${e.degree ? (e.degree.includes("success") ? "ok" : "fail") : ""}`}
       style={{ "--toast-color": e.diceColor ?? e.playerColor } as CSSProperties}
       onClick={onDismiss}
       title="Clic para cerrar"
@@ -32,6 +34,7 @@ function Card({ item, onDismiss }: { item: ToastItem; onDismiss: () => void }) {
           {!hidden && (
             <div className="t-detail">
               {e.formula}: {e.detail}
+              {e.notes ? ` · ${e.notes}` : ""}
             </div>
           )}
         </div>

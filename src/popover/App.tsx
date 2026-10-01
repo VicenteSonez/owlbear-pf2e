@@ -1,25 +1,38 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import OBR from "@owlbear-rodeo/sdk";
-import { damageFormula, fmtMod, type Character, type Weapon } from "../pathbuilder";
+import { fmtMod, type Character } from "../pathbuilder";
 import { Dice3D, evaluate, parseFormula, randomValues, type DiceStyle } from "../dice";
-import { autoLinkCandidate, inOwlbear, linkToken, unlinkToken } from "../obr";
+import { autoLinkCandidate, inOwlbear, linkToken, patchNpc, publishPlayer, unlinkToken } from "../obr";
 import { store } from "../storage";
+import { live, needsSheetSync, seedState, syncSheet, useLiveStates, type PcState } from "../live";
+import { DEGREE_LABEL, applyDamage, applyRecovery, degreeOf, type Conditions, type Degree } from "../rules";
 import { newId, type RollEntry } from "../shared";
-import { playerMeta, useParty, useRollLog, useSession, useVitals } from "./hooks";
+import { resolvePersistent } from "../autoRoll";
+import { playerMeta, useLinkedToken, useParty, useRollLog, useSession } from "./hooks";
 import { Importer } from "./Importer";
 import { SheetTabs } from "./SheetTabs";
 import { Vitals } from "./Vitals";
 import { LogList } from "./LogList";
 import { DiceSettings } from "./DiceSettings";
 import { NatFx } from "./NatFx";
+import { FlatChecks, type FlatRequest } from "./FlatChecks";
+import { GmView } from "./GmView";
+import type { Target } from "./EffectsPanel";
 
 const dice = new Dice3D();
+
+// La pestaña GM necesita más ancho para la lista y el panel de efectos
+const WIDTH_SHEET = 420;
+const WIDTH_GM = 760;
 
 export interface RollRequest {
   label: string;
   formula: string;
   kind: RollEntry["kind"];
   crit?: boolean;
+  // Condiciones que modifican la tirada, para mostrarlas junto al resultado
+  notes?: string;
+  flat?: FlatRequest;
 }
 
 interface Current {
@@ -29,6 +42,8 @@ interface Current {
   detail?: string;
   nat?: 1 | 20;
   secret?: boolean;
+  notes?: string;
+  degree?: Degree;
   rolling: boolean;
 }
 
@@ -41,20 +56,27 @@ interface Overlay {
   total?: number;
   detail?: string;
   nat?: 1 | 20;
+  degree?: Degree;
+  dc?: number;
+  notes?: string;
 }
 
 const OVERLAY_MS = 1700;
 const OVERLAY_NAT_MS = 2900;
 
-type View = "sheet" | "party" | "import";
+type View = "sheet" | "gm" | "import" | "gm-import";
+
+const degreeClass = (d?: Degree) => (d ? (d.includes("success") ? "ok" : "fail") : "");
 
 export function App() {
   const session = useSession();
+  const isGm = session.me.role === "GM";
+  const { states, ready: liveReady } = useLiveStates();
   const [characters, setCharacters] = useState<Character[]>(() => store.characters());
   const [activeId, setActiveId] = useState<string | null>(null);
   const [view, setView] = useState<View>("sheet");
-  const [remoteId, setRemoteId] = useState<string | null>(null);
-  const isGm = session.me.role === "GM";
+  // Hoja de otro PJ abierta por el GM desde la pestaña GM
+  const [viewId, setViewId] = useState<string | null>(null);
   const party = useParty(session.ready && isGm);
 
   useEffect(() => {
@@ -62,23 +84,63 @@ export function App() {
     const id = store.activeId(session.room);
     const exists = characters.some((c) => c.id === id);
     setActiveId(exists ? id : null);
-    if (!exists) setView("import");
+    if (!exists) setView(isGm ? "gm" : "import");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.ready, session.room]);
 
   const own = useMemo(() => characters.find((c) => c.id === activeId), [characters, activeId]);
 
-  // El GM puede abrir la hoja de otro jugador desde "Grupo"
-  const remotePlayer = party.find((p) => p.id === remoteId);
-  const remoteMeta = remotePlayer ? playerMeta(remotePlayer) : undefined;
-  const remoteChar = remoteMeta?.character;
-  const remoteKey = remoteChar ? `${remoteChar.id}:${remoteChar.importedAt}` : "";
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const stableRemote = useMemo(() => remoteChar, [remoteKey]);
+  // Hojas que el GM puede abrir: las suyas, las de jugadores conectados y las que ya vio antes
+  const [gmCache, setGmCache] = useState(() => store.gmSheets());
+  useEffect(() => {
+    if (!isGm) return;
+    for (const p of party) {
+      const c = playerMeta(p)?.character;
+      if (c) store.cacheGmSheet(c);
+    }
+    setGmCache(store.gmSheets());
+  }, [party, isGm]);
 
-  const showingRemote = view === "sheet" && !!stableRemote;
-  const character = showingRemote ? stableRemote : own;
-  const vit = useVitals(character, showingRemote ? "remote" : "own", showingRemote ? remoteMeta?.vitals : undefined);
+  const sheets = useMemo(() => {
+    const map: Record<string, Character> = { ...gmCache };
+    for (const p of party) {
+      const c = playerMeta(p)?.character;
+      if (c) map[c.id] = c;
+    }
+    for (const c of characters) map[c.id] = c;
+    return map;
+  }, [gmCache, party, characters]);
+
+  const character = (viewId ? sheets[viewId] : undefined) ?? own;
+  const state = character ? states[character.id] : undefined;
+  const canEdit = !inOwlbear || isGm || (!!state && state.owner === session.me.id);
+  const token = useLinkedToken(character?.id);
+  const ownsCharacter = !!character && characters.some((c) => c.id === character.id);
+
+  // Siembra en la sala el estado de la hoja activa y lo mantiene al día si se reimporta
+  useEffect(() => {
+    if (!liveReady || !session.ready) return;
+    for (const c of characters) {
+      const s = states[c.id];
+      const isActive = c.id === activeId;
+      if (!s) {
+        if (isActive) live.write(seedState(c, { id: session.me.id, name: session.me.name }, store.legacyVitals(c.id) ?? undefined));
+        continue;
+      }
+      if (s.owner !== session.me.id) continue;
+      const ownerName = isActive ? session.me.name : s.ownerName;
+      if (needsSheetSync(s, c) || s.ownerName !== ownerName) live.write({ ...syncSheet(s, c), ownerName });
+    }
+  }, [liveReady, session.ready, characters, activeId, states, session.me.id, session.me.name]);
+
+  // Publica la hoja propia para que el GM pueda abrirla
+  useEffect(() => {
+    if (own) publishPlayer({ character: own });
+  }, [own]);
+
+  useEffect(() => {
+    if (inOwlbear && session.ready) OBR.action.setWidth(view === "gm" ? WIDTH_GM : WIDTH_SHEET).catch(() => undefined);
+  }, [view, session.ready]);
 
   const { log, publish, clear } = useRollLog(session);
 
@@ -86,26 +148,32 @@ export function App() {
     (id: string | null) => {
       store.setActiveId(session.room, id);
       setActiveId(id);
-      setRemoteId(null);
+      setViewId(null);
       if (id) setView("sheet");
     },
     [session.room],
   );
 
   const onImported = useCallback(
-    async (c: Character) => {
-      store.saveCharacter(c);
+    async (c: Character, raw: unknown) => {
+      store.saveCharacter(c, raw);
       setCharacters(store.characters());
+      if (view === "gm-import") {
+        // Hoja que controla el GM (o de un jugador ausente): queda en la sala con el GM como dueño
+        if (!live.get(c.id)) await live.write(seedState(c, { id: session.me.id, name: "" }));
+        setView("gm");
+        return;
+      }
       selectCharacter(c.id);
       if (!inOwlbear) return;
       // Reconocimiento automático: busca el token del personaje en el mapa
       const cand = await autoLinkCandidate(c);
       if (cand) {
-        await linkToken(cand.id, c, store.vitals(c));
+        await linkToken(cand.id, c, session.me.id);
         OBR.notification.show(`${c.name} vinculado a "${cand.name}".`, "SUCCESS");
       }
     },
-    [selectCharacter],
+    [selectCharacter, view, session.me.id],
   );
 
   const onDeleted = useCallback(
@@ -117,13 +185,20 @@ export function App() {
     [activeId, selectCharacter],
   );
 
+  const onPatch = useCallback(
+    (fn: (s: PcState) => PcState) => {
+      if (character) live.patch(character.id, fn);
+    },
+    [character],
+  );
+
   // ---------- Dados ----------
   const [current, setCurrent] = useState<Current | null>(null);
   const [secret, setSecret] = useState(false);
   const [extra, setExtra] = useState(0);
   const [freeText, setFreeText] = useState("");
   const [diceStyle, setDiceStyle] = useState<DiceStyle>(() => store.diceStyle());
-  const [showDiceSettings, setShowDiceSettings] = useState(false);
+  const [menu, setMenu] = useState<"dice" | "flat" | null>(null);
   const [overlay, setOverlay] = useState<Overlay>({ phase: "hidden", key: 0, label: "" });
   const busy = useRef(false);
   const rollKey = useRef(0);
@@ -187,6 +262,7 @@ export function App() {
       setCurrent,
       holdOverlay: () => window.clearTimeout(hideTimer.current),
       dice,
+      live,
     };
   }, [showOverlay]);
 
@@ -194,6 +270,11 @@ export function App() {
     setDiceStyle(s);
     store.setDiceStyle(s);
   }, []);
+
+  const who = useMemo(
+    () => ({ playerId: session.me.id, playerName: session.me.name, playerColor: session.me.color }),
+    [session.me.id, session.me.name, session.me.color],
+  );
 
   const roll = useCallback(
     async (req: RollRequest, opts: { preview?: boolean } = {}) => {
@@ -212,27 +293,52 @@ export function App() {
       const isSecret = secret && !opts.preview;
       const hideFromMe = isSecret && !isGm;
       const key = ++rollKey.current;
+      const rollingFor = character?.id;
       setCurrent({ label: req.label, formula, rolling: true, secret: isSecret });
       if (!hideFromMe) showOverlay({ phase: "rolling", key, label: req.label });
       try {
         const values = hideFromMe ? randomValues(f) : await dice.roll(f);
         const out = evaluate(f, values, { crit: req.crit, check: req.kind !== "damage" });
         const shownFormula = req.crit ? `2×(${formula})` : formula;
+        let degree: Degree | undefined;
+        if (req.flat) {
+          const d20 = values[0]?.[0];
+          degree = req.flat.recovery ? degreeOf(out.total, req.flat.dc, d20) : out.total >= req.flat.dc ? "success" : "failure";
+        }
         if (!hideFromMe) {
-          showOverlay({ phase: "result", key, label: req.label, formula: shownFormula, total: out.total, detail: out.detail, nat: out.nat });
+          showOverlay({
+            phase: "result",
+            key,
+            label: req.label,
+            formula: shownFormula,
+            total: out.total,
+            detail: out.detail,
+            nat: out.nat,
+            degree,
+            dc: req.flat?.dc,
+            notes: req.notes,
+          });
         }
         setCurrent(
           hideFromMe
             ? { label: req.label, formula, rolling: false, secret: true }
-            : { label: req.label, formula: shownFormula, total: out.total, detail: out.detail, nat: out.nat, secret: isSecret, rolling: false },
+            : {
+                label: req.label,
+                formula: shownFormula,
+                total: out.total,
+                detail: out.detail,
+                nat: out.nat,
+                secret: isSecret,
+                notes: req.notes,
+                degree,
+                rolling: false,
+              },
         );
         if (opts.preview) return;
         const entry: RollEntry = {
           id: newId(),
           time: Date.now(),
-          playerId: session.me.id,
-          playerName: session.me.name,
-          playerColor: session.me.color,
+          ...who,
           charName: character?.name,
           label: req.label,
           formula: shownFormula,
@@ -243,48 +349,69 @@ export function App() {
           crit: req.crit,
           secret: isSecret || undefined,
           diceColor: diceStyle.color,
+          notes: req.notes,
+          dc: req.flat?.dc,
+          degree,
         };
         await publish(entry);
+        // La tirada de recuperación cambia moribundo según el resultado
+        if (req.flat?.recovery && degree && rollingFor) await live.patch(rollingFor, (s) => applyRecovery(s, degree!));
       } finally {
         busy.current = false;
       }
     },
-    [extra, secret, isGm, session.me, character?.name, publish, showOverlay, diceStyle.color],
-  );
-
-  const rollWeapon = useCallback(
-    (w: Weapon, what: "attack" | "damage" | "crit", mapIndex = 0, bonus = w.attack) => {
-      if (what === "attack") {
-        const mapTxt = ["1er ataque", "2º ataque", "3er ataque"][mapIndex];
-        roll({ label: `${w.name}: ${mapTxt}`, formula: `1d20${fmtMod(bonus)}`, kind: "check" });
-      } else {
-        roll({
-          label: `${w.name}: ${what === "crit" ? "Crítico" : "Daño"}${w.damageType ? ` (${w.damageType})` : ""}`,
-          formula: damageFormula(w),
-          kind: "damage",
-          crit: what === "crit",
-        });
-      }
-    },
-    [roll],
+    [extra, secret, isGm, who, character, publish, showOverlay, diceStyle.color],
   );
 
   const freeRoll = (formula: string) => roll({ label: "Tirada libre", formula, kind: "free" });
+  const flatRoll = (r: FlatRequest) => roll({ label: r.label, formula: "1d20", kind: "flat", flat: r });
+
+  // GM: resuelve el daño persistente de un PJ o PNJ (luego lo hará solo la iniciativa)
+  const resolvePersistentFor = useCallback(
+    async (t: Target) => {
+      const list = t.state.cond?.persistent ?? [];
+      if (!list.length) return;
+      const { damage, ended, entries } = resolvePersistent(who, t.state.name, list);
+      for (const e of entries) await publish(e);
+      const prune = (c: Conditions): Conditions => ({ ...c, persistent: (c.persistent ?? []).filter((p) => !ended.includes(p.id)) });
+      if (t.kind === "pc") {
+        await live.patch(t.state.id, (s) => ({ ...applyDamage(s, damage), cond: prune(s.cond) }));
+      } else {
+        await patchNpc(t.tokenId, (n) => {
+          const hit = applyDamage({ hp: n.hp, temp: n.temp, dying: 0, wounded: 0 }, damage);
+          return { ...n, hp: hit.hp, temp: hit.temp, cond: prune(n.cond) };
+        });
+      }
+    },
+    [who, publish],
+  );
 
   if (!session.ready) return <div className="loading">Conectando con Owlbear…</div>;
+
+  const viewingOther = !!viewId && !!sheets[viewId] && viewId !== own?.id;
 
   return (
     <div className="app">
       <nav className="topnav">
-        <button className={view === "sheet" && !showingRemote ? "on" : ""} onClick={() => { setRemoteId(null); setView(own ? "sheet" : "import"); }}>
+        <button
+          className={view === "sheet" && !viewingOther ? "on" : ""}
+          onClick={() => {
+            setViewId(null);
+            setView(own ? "sheet" : "import");
+          }}
+        >
           {own ? own.name : "Mi hoja"}
         </button>
-        {isGm && (
-          <button className={view === "party" ? "on" : ""} onClick={() => setView("party")}>
-            Grupo
+        {viewingOther && (
+          <button className={view === "sheet" ? "on" : ""} onClick={() => setView("sheet")}>
+            {sheets[viewId!].name}
           </button>
         )}
-        {showingRemote && <button className="on">{stableRemote!.name}</button>}
+        {isGm && (
+          <button className={view === "gm" || view === "gm-import" ? "on" : ""} onClick={() => setView("gm")}>
+            GM
+          </button>
+        )}
         <button className={`icon ${view === "import" ? "on" : ""}`} title="Personajes / importar" onClick={() => setView("import")}>
           ⚙
         </button>
@@ -293,34 +420,56 @@ export function App() {
       {view === "import" && (
         <Importer characters={characters} activeId={activeId} onImported={onImported} onSelect={selectCharacter} onDelete={onDeleted} />
       )}
+      {view === "gm-import" && (
+        <Importer
+          mode="gm"
+          characters={characters}
+          activeId={activeId}
+          onImported={onImported}
+          onSelect={selectCharacter}
+          onDelete={onDeleted}
+          onCancel={() => setView("gm")}
+        />
+      )}
 
-      {view === "party" && (
-        <PartyView players={party} onOpen={(id) => { setRemoteId(id); setView("sheet"); }} />
+      {view === "gm" && (
+        <GmView
+          states={states}
+          sheets={sheets}
+          onOpenSheet={(id) => {
+            setViewId(id);
+            setView("sheet");
+          }}
+          onUpload={() => setView("gm-import")}
+          onResolvePersistent={resolvePersistentFor}
+        />
       )}
 
       <div className={view === "sheet" && character ? "sheet" : "sheet hidden"}>
-        {character && vit.vitals && (
+        {character && state && (
           <Vitals
             character={character}
-            vitals={vit.vitals}
-            canEdit={vit.canEdit}
-            token={vit.token}
-            remote={showingRemote}
-            onUpdate={vit.update}
+            state={state}
+            canEdit={canEdit}
+            showLink={inOwlbear && (ownsCharacter || isGm)}
+            token={token}
+            onPatch={onPatch}
             onLink={async () => {
               if (!inOwlbear) return;
               const sel = await OBR.player.getSelection();
+              const owner = state.owner ?? session.me.id;
               if (sel?.length === 1) {
-                await vit.link(sel[0]);
+                await linkToken(sel[0], character, owner);
                 return;
               }
               const cand = await autoLinkCandidate(character);
-              if (cand) await vit.link(cand.id);
+              if (cand) await linkToken(cand.id, character, owner);
               else OBR.notification.show("Selecciona tu token en el mapa y vuelve a pulsar Vincular.", "INFO");
             }}
-            onUnlink={() => vit.token && unlinkToken(vit.token.id)}
+            onUnlink={() => token && unlinkToken(token.id)}
           />
         )}
+        {character && !state && <section className="vitals muted">Preparando la hoja en la sala…</section>}
 
         <div className="sheet-body">
           <div className="sheet-scroll">
@@ -332,43 +481,64 @@ export function App() {
                   </button>
                 ))}
                 <button
-                  className={`btn dice palette ${showDiceSettings ? "on" : ""}`}
+                  className={`btn dice flat ${menu === "flat" ? "on" : ""}`}
+                  title="Tiradas planas: CD 11, CD 5, recuperación…"
+                  onClick={() => setMenu((m) => (m === "flat" ? null : "flat"))}
+                >
+                  CD
+                </button>
+                <button
+                  className={`btn dice palette ${menu === "dice" ? "on" : ""}`}
                   title="Color y tema de tus dados"
-                  onClick={() => setShowDiceSettings((v) => !v)}
+                  onClick={() => setMenu((m) => (m === "dice" ? null : "dice"))}
                 >
                   <span className="palette-dot" style={{ background: diceStyle.color }} />
                 </button>
               </div>
-              {showDiceSettings && (
+              {menu === "dice" && (
                 <DiceSettings
                   style={diceStyle}
                   onChange={changeDiceStyle}
-                  onClose={() => setShowDiceSettings(false)}
+                  onClose={() => setMenu(null)}
                   onTest={() => roll({ label: "Prueba de dados", formula: "1d20", kind: "free" }, { preview: true })}
                 />
               )}
-              <div className={`result-bar ${current?.nat === 20 ? "nat20" : current?.nat === 1 ? "nat1" : ""}`}>
+              {menu === "flat" && (
+                <FlatChecks
+                  stupefied={state?.cond.stupefied ?? 0}
+                  dying={state?.dying ?? 0}
+                  onFlat={flatRoll}
+                  onClose={() => setMenu(null)}
+                />
+              )}
+              <div
+                className={`result-bar ${current?.nat === 20 ? "nat20" : current?.nat === 1 ? "nat1" : ""} ${degreeClass(current?.degree)}`}
+              >
                 <div className="rb-label">{current?.label ?? "Elige una tirada"}</div>
                 {current?.rolling && <div className="rb-rolling">Tirando…</div>}
-                {current && !current.rolling && current.total === undefined && (
-                  <div className="rb-secret">🔒 Enviada al GM</div>
-                )}
+                {current && !current.rolling && current.total === undefined && <div className="rb-secret">🔒 Enviada al GM</div>}
                 {current && !current.rolling && current.total !== undefined && (
                   <div className="rb-main">
                     <b>{current.total}</b>
+                    {current.degree && <span className={`rb-degree ${degreeClass(current.degree)}`}>{DEGREE_LABEL[current.degree]}</span>}
                     <small>
                       {current.formula}: {current.detail}
                       {current.nat === 20 ? " · ¡20 natural!" : current.nat === 1 ? " · 1 natural" : ""}
                     </small>
                   </div>
                 )}
+                {current?.notes && !current.rolling && <div className="rb-notes">{current.notes}</div>}
               </div>
               <div className="roll-opts">
                 <label className="mod">
                   Mod.
-                  <button type="button" onClick={() => setExtra((n) => n - 1)}>−</button>
+                  <button type="button" onClick={() => setExtra((n) => n - 1)}>
+                    −
+                  </button>
                   <span className={extra ? "active" : ""}>{fmtMod(extra)}</span>
-                  <button type="button" onClick={() => setExtra((n) => n + 1)}>+</button>
+                  <button type="button" onClick={() => setExtra((n) => n + 1)}>
+                    +
+                  </button>
                   {extra !== 0 && (
                     <button type="button" className="reset" onClick={() => setExtra(0)} title="Quitar modificador">
                       ×
@@ -383,7 +553,9 @@ export function App() {
                   }}
                 >
                   <input value={freeText} placeholder="2d6+3" title="Tirada libre" onChange={(e) => setFreeText(e.target.value)} />
-                  <button className="btn" title="Tirar">▶</button>
+                  <button className="btn" title="Tirar">
+                    ▶
+                  </button>
                 </form>
                 <label className={`secret ${secret ? "active" : ""}`} title="Solo el GM ve el resultado">
                   <input type="checkbox" checked={secret} onChange={(e) => setSecret(e.target.checked)} />
@@ -394,7 +566,15 @@ export function App() {
             </section>
 
             {character && (
-              <SheetTabs character={character} onRoll={roll} onWeapon={rollWeapon} log={log} onClearLog={clear} />
+              <SheetTabs
+                character={character}
+                state={state}
+                canEdit={canEdit}
+                onRoll={roll}
+                onPatch={onPatch}
+                log={log}
+                onClearLog={clear}
+              />
             )}
           </div>
 
@@ -411,9 +591,16 @@ export function App() {
               <div className="overlay-total" key={`total-${overlay.key}`}>
                 <small>TOTAL</small>
                 <b>{overlay.total}</b>
+                {overlay.degree && (
+                  <em className={degreeClass(overlay.degree)}>
+                    {DEGREE_LABEL[overlay.degree]}
+                    {overlay.dc ? ` · CD ${overlay.dc}` : ""}
+                  </em>
+                )}
                 <span>
                   {overlay.formula}: {overlay.detail}
                 </span>
+                {overlay.notes && <span className="overlay-notes">{overlay.notes}</span>}
               </div>
             )}
             {overlay.phase === "result" && overlay.nat && <NatFx key={`fx-${overlay.key}`} nat={overlay.nat} />}
@@ -421,43 +608,5 @@ export function App() {
         </div>
       </div>
     </div>
-  );
-}
-
-function PartyView(props: { players: ReturnType<typeof useParty>; onOpen: (id: string) => void }) {
-  const withSheets = props.players.filter((p) => playerMeta(p));
-  const without = props.players.filter((p) => !playerMeta(p));
-  return (
-    <section className="party">
-      {!inOwlbear && <p className="muted">El grupo solo está disponible dentro de Owlbear.</p>}
-      {withSheets.map((p) => {
-        const m = playerMeta(p)!;
-        const c = m.character;
-        const pct = Math.max(0, Math.min(100, (m.vitals.hp / c.maxHp) * 100));
-        return (
-          <button key={p.connectionId} className="party-card" onClick={() => props.onOpen(p.id)}>
-            <div className="party-top">
-              <span className="dot" style={{ background: p.color }} />
-              <b>{c.name}</b>
-              <span className="muted">{p.name}</span>
-            </div>
-            <div className="muted small">
-              {c.ancestry} {c.className} {c.level} · CA {m.vitals.ac} · Perc {fmtMod(c.perception.mod)}
-            </div>
-            <div className="mini-bar">
-              <div style={{ width: `${pct}%` }} />
-              <span>
-                {m.vitals.hp}/{c.maxHp}
-                {m.vitals.temp ? ` +${m.vitals.temp}` : ""}
-              </span>
-            </div>
-          </button>
-        );
-      })}
-      {without.length > 0 && (
-        <p className="muted small">Sin hoja subida: {without.map((p) => p.name).join(", ")}</p>
-      )}
-      {inOwlbear && props.players.length === 0 && <p className="muted">No hay otros jugadores conectados.</p>}
-    </section>
   );
 }

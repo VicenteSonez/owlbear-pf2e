@@ -10,6 +10,7 @@ export interface Stat {
   label: string;
   mod: number;
   prof: ProfRank;
+  ability: Ability;
 }
 
 export interface DamageExtra {
@@ -22,6 +23,8 @@ export interface DamageExtra {
 
 export interface Weapon {
   name: string;
+  // Nombre base en minúsculas: sirve de clave para los ajustes manuales del jugador
+  key: string;
   attack: number;
   diceCount: number;
   dieSides: number;
@@ -29,6 +32,17 @@ export interface Weapon {
   damageType: string;
   extra: DamageExtra[];
   agile: boolean;
+  finesse: boolean;
+  ranged: boolean;
+  // Incremento de alcance en pies (solo armas a distancia)
+  range?: number;
+}
+
+export interface ShieldInfo {
+  name: string;
+  bonus: number;
+  hardness: number;
+  hp: number;
 }
 
 export interface SpellCaster {
@@ -40,7 +54,11 @@ export interface SpellCaster {
   spells: { rank: number; names: string[] }[];
 }
 
+// Sube este número cuando el lector cambie: las hojas guardadas se vuelven a leer solas
+export const PARSER_VERSION = 2;
+
 export interface Character {
+  parserVersion?: number;
   id: string;
   name: string;
   className: string;
@@ -50,6 +68,12 @@ export interface Character {
   level: number;
   size: string;
   speed: number;
+  speedBase?: number;
+  speedBonus?: number;
+  senses?: string[];
+  shield?: ShieldInfo;
+  // Kineticista: ataque y CD de impulsos (usan Constitución)
+  impulse?: { attack: number; dc: number };
   abilities: Record<Ability, number>;
   maxHp: number;
   ac: number;
@@ -64,7 +88,7 @@ export interface Character {
 
 const ABILITIES: Ability[] = ["str", "dex", "con", "int", "wis", "cha"];
 
-const SKILLS: [string, string, Ability][] = [
+export const SKILLS: [string, string, Ability][] = [
   ["acrobatics", "Acrobacias", "dex"],
   ["arcana", "Arcanos", "int"],
   ["athletics", "Atletismo", "str"],
@@ -97,6 +121,54 @@ const AGILE_WEAPONS = [
   "unarmed", "tekko-kagi", "wakizashi", "kama", "jaws of", "fighting fan",
   "butterfly sword", "sword cane", "tamchal chakram", "throwing knife",
 ];
+
+// Armas sutiles (Torpe las penaliza)
+const FINESSE_WEAPONS = [
+  "dagger", "rapier", "shortsword", "whip", "main-gauche", "sickle", "kukri", "starknife", "sai",
+  "fist", "handwraps", "claw", "elven curve blade", "sword cane", "spiked chain", "butterfly sword",
+  "tekko-kagi", "wakizashi", "fighting fan", "war razor", "dueling sword", "bladed scarf", "unarmed",
+];
+
+// Armas a distancia y su incremento de alcance en pies (se puede editar a mano).
+// Ordenadas de más específica a más general porque se buscan por coincidencia parcial.
+const RANGED_WEAPONS: [string, number][] = [
+  ["repeating heavy crossbow", 120], ["repeating hand crossbow", 60], ["repeating crossbow", 120],
+  ["heavy crossbow", 120], ["hand crossbow", 60], ["gauntlet bow", 60], ["crossbow", 120],
+  ["composite longbow", 100], ["composite shortbow", 60], ["longbow", 100], ["shortbow", 60], ["daikyu", 80],
+  ["halfling sling staff", 80], ["sling", 50], ["blowgun", 20], ["dart", 20], ["javelin", 30],
+  ["shuriken", 20], ["bola", 20], ["throwing knife", 20], ["chakri", 20], ["boomerang", 60],
+  ["dueling pistol", 60], ["flintlock pistol", 40], ["flintlock musket", 70], ["arquebus", 150],
+  ["blunderbuss", 40], ["pepperbox", 30], ["hand cannon", 30], ["dragon mouth pistol", 20], ["jezail", 90],
+  ["slide pistol", 30], ["harmona gun", 150], ["double-barreled pistol", 30], ["double-barreled musket", 60],
+  ["dwarven scattergun", 30], ["pistol", 40], ["musket", 70],
+];
+
+// Sentidos especiales: se buscan en los rasgos especiales y en los nombres de dotes
+const SENSES: [string, string][] = [
+  ["Greater Darkvision", "Visión en la oscuridad mayor"],
+  ["Darkvision", "Visión en la oscuridad"],
+  ["Low-Light Vision", "Visión en penumbra"],
+  ["Scent", "Olfato"],
+  ["Tremorsense", "Sentido de la vibración"],
+  ["Echolocation", "Ecolocalización"],
+  ["Wavesense", "Sentido de las ondas"],
+  ["Lifesense", "Sentido de la vida"],
+  ["Thoughtsense", "Sentido del pensamiento"],
+  ["Motion Sense", "Sentido del movimiento"],
+  ["Spiritsense", "Sentido espiritual"],
+];
+
+// Escudos comunes: bono a la CA, dureza y PG
+export const SHIELDS: Record<string, { bonus: number; hardness: number; hp: number }> = {
+  buckler: { bonus: 1, hardness: 3, hp: 6 },
+  "gauntlet buckler": { bonus: 1, hardness: 3, hp: 6 },
+  "wooden shield": { bonus: 2, hardness: 3, hp: 12 },
+  "steel shield": { bonus: 2, hardness: 5, hp: 20 },
+  "tower shield": { bonus: 2, hardness: 5, hp: 20 },
+  "fortress shield": { bonus: 3, hardness: 6, hp: 24 },
+  "meteor shield": { bonus: 2, hardness: 4, hp: 16 },
+  "heavy rondache": { bonus: 1, hardness: 5, hp: 24 },
+};
 
 export const PROF_LABEL: Record<number, string> = { 0: "U", 2: "T", 4: "E", 6: "M", 8: "L" };
 
@@ -174,7 +246,7 @@ export function parsePathbuilder(raw: unknown): Character {
   const profBonus = (rank: ProfRank) => (rank > 0 ? rank + level : 0);
   const stat = (key: string, label: string, ab: Ability, rankRaw: unknown, modName = key): Stat => {
     const rank = toRank(rankRaw);
-    return { key, label, prof: rank, mod: abilities[ab] + profBonus(rank) + modBonus(mods, modName) };
+    return { key, label, prof: rank, ability: ab, mod: abilities[ab] + profBonus(rank) + modBonus(mods, modName) };
   };
 
   const skills = SKILLS.map(([k, label, ab]) => stat(k, label, ab, prof[k]));
@@ -192,17 +264,52 @@ export function parsePathbuilder(raw: unknown): Character {
   const weapons: Weapon[] = (Array.isArray(b.weapons) ? b.weapons : []).map((w: Json) => {
     const baseName = String(w.name ?? "").toLowerCase();
     const display = String(w.display || w.name || "Arma");
+    const ranged = RANGED_WEAPONS.find(([n]) => baseName.includes(n));
     return {
       name: display,
+      key: baseName || display.toLowerCase(),
       attack: num(w.attack),
       diceCount: strikingDice(w.str),
       dieSides: num(String(w.die ?? "d4").replace(/\D/g, ""), 4),
       damageBonus: num(w.damageBonus),
       damageType: DAMAGE_TYPES[String(w.damageType)] ?? String(w.damageType ?? ""),
       extra: parseExtra(w.extraDamage),
-      agile: AGILE_WEAPONS.some((a) => baseName.includes(a)),
+      // "Gauntlet Bow" contiene "gauntlet" pero es un arco, no un arma ágil
+      agile: !/bow\b/.test(baseName) && AGILE_WEAPONS.some((a) => baseName.includes(a)),
+      finesse: FINESSE_WEAPONS.some((a) => baseName.includes(a)),
+      ranged: !!ranged,
+      range: ranged?.[1],
     };
   });
+
+  // Sentidos: en "specials" o en el nombre de alguna dote
+  const traitNames: string[] = [
+    ...(Array.isArray(b.specials) ? b.specials.map(String) : []),
+    ...(Array.isArray(b.feats) ? b.feats.map((f: unknown[]) => String(f?.[0] ?? "")) : []),
+  ].map((t) => t.toLowerCase());
+  const senses: string[] = [];
+  for (const [en, es] of SENSES) {
+    if (!traitNames.some((t) => t.includes(en.toLowerCase()))) continue;
+    // "Darkvision" ya va incluido en "Greater Darkvision"
+    if (en === "Darkvision" && senses.includes("Visión en la oscuridad mayor")) continue;
+    senses.push(es);
+  }
+
+  // Escudo equipado: Pathbuilder lo lista en "armor" con prof "shield"
+  const shieldEntry = (Array.isArray(b.armor) ? b.armor : []).find(
+    (a: Json) => String(a.prof).toLowerCase() === "shield" && a.worn !== false,
+  );
+  let shield: ShieldInfo | undefined;
+  if (shieldEntry) {
+    const shieldName = String(shieldEntry.name ?? "Escudo");
+    const known = SHIELDS[shieldName.toLowerCase()];
+    shield = {
+      name: String(shieldEntry.display || shieldName),
+      bonus: num(b.acTotal?.shieldBonus, known?.bonus ?? 2),
+      hardness: known?.hardness ?? 0,
+      hp: known?.hp ?? 0,
+    };
+  }
 
   const casters: SpellCaster[] = (Array.isArray(b.spellCasters) ? b.spellCasters : []).map(
     (c: Json) => {
@@ -250,21 +357,29 @@ export function parsePathbuilder(raw: unknown): Character {
 
   const keyAb = (String(b.keyability ?? "str").slice(0, 3) as Ability) || "str";
   const name = String(b.name ?? "Personaje");
+  const classDc = 10 + (abilities[keyAb] ?? 0) + profBonus(toRank(prof.classDC));
+  const className = [b.class, b.dualClass].filter(Boolean).join(" / ");
 
   return {
+    parserVersion: PARSER_VERSION,
     id: hashId(`${name}|${b.class}|${b.ancestry}`),
     name,
-    className: [b.class, b.dualClass].filter(Boolean).join(" / "),
+    className,
     ancestry: String(b.ancestry ?? ""),
     heritage: String(b.heritage ?? ""),
     background: String(b.background ?? ""),
     level,
     size: String(b.sizeName ?? ""),
     speed: num(attrs.speed) + num(attrs.speedBonus),
+    speedBase: num(attrs.speed),
+    speedBonus: num(attrs.speedBonus),
+    senses,
+    shield,
+    impulse: /kineticist/i.test(className) ? { attack: classDc - 10, dc: classDc } : undefined,
     abilities,
     maxHp: Math.max(1, maxHp),
     ac: num(b.acTotal?.acTotal, 10),
-    classDc: 10 + (abilities[keyAb] ?? 0) + profBonus(toRank(prof.classDC)),
+    classDc,
     perception: stat("perception", "Percepción", "wis", prof.perception),
     saves: SAVES.map(([k, label, ab]) => stat(k, label, ab, prof[k])),
     skills: [...skills, ...lores],
