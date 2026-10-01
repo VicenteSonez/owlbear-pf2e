@@ -379,7 +379,8 @@ async function buildOverlay(item: Item, v: TokenView): Promise<Item[]> {
 
   // Fila de íconos (condiciones, moribundo, escudo alzado) sobre la barra
   if (v.icons.length) {
-    const size = dpi * 0.26;
+    // Crecen con el token (criaturas grandes) pero sin pasar de media casilla
+    const size = Math.min(dpi * 0.5, Math.max(dpi * 0.3, w * 0.2));
     const gap = size * 0.12;
     const fit = Math.max(1, Math.floor((w + gap) / (size + gap)));
     const shown = v.icons.slice(0, fit);

@@ -372,7 +372,9 @@ export function App() {
       const list = t.state.cond?.persistent ?? [];
       if (!list.length) return;
       const { damage, ended, entries } = resolvePersistent(who, t.state.name, list);
-      for (const e of entries) await publish(e);
+      // Un PNJ oculto no debe delatarse en las tarjetas de los jugadores
+      const hidden = t.kind === "npc" && !!t.state.hidden;
+      for (const e of entries) await publish(hidden ? { ...e, secret: true } : e);
       const prune = (c: Conditions): Conditions => ({ ...c, persistent: (c.persistent ?? []).filter((p) => !ended.includes(p.id)) });
       if (t.kind === "pc") {
         await live.patch(t.state.id, (s) => ({ ...applyDamage(s, damage), cond: prune(s.cond) }));
