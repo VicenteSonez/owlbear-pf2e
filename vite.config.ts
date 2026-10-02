@@ -28,10 +28,20 @@ function manifestBasePath(): Plugin {
   };
 }
 
+// Script en línea al inicio de cada página: recupera la página si sus archivos no cargan
+// (HTML viejo en caché tras publicar) y muestra el error si la app se cae sin dibujar nada.
+function bootFallback(): Plugin {
+  const code = readFileSync(resolve(import.meta.dirname, "src/boot-fallback.js"), "utf8");
+  return {
+    name: "boot-fallback",
+    transformIndexHtml: () => [{ tag: "script", children: code, injectTo: "head-prepend" }],
+  };
+}
+
 // base relativa: los assets funcionan igual en GitHub Pages y en localhost
 export default defineConfig({
   base: "./",
-  plugins: [react(), manifestBasePath()],
+  plugins: [react(), manifestBasePath(), bootFallback()],
   define: {
     __BUILD_ID__: JSON.stringify(BUILD_ID),
   },
