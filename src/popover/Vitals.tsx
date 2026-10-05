@@ -1,18 +1,17 @@
-import { useState } from "react";
 import type { Item } from "@owlbear-rodeo/sdk";
 import type { Character } from "../pathbuilder";
 import type { PcState } from "../live";
 import {
   DEATH_DYING,
-  applyDamage,
-  applyHealing,
   effectiveAc,
   effectiveMaxHp,
   modsText,
   shieldBroken,
 } from "../rules";
 import { hpColor } from "../shared";
+import { dealDamage, healTarget } from "../damage";
 import { CondIcon, ConditionRow, Pips } from "./bits";
+import { DamageBox } from "./DamageBox";
 
 interface Props {
   character: Character;
@@ -34,7 +33,6 @@ export function speedTitle(c: Character) {
 }
 
 export function Vitals({ character: c, state: s, canEdit, showLink, token, onPatch, onLink, onUnlink }: Props) {
-  const [amount, setAmount] = useState("");
   const maxHp = effectiveMaxHp(s.maxHp, s.level, s.cond);
   const { ac, applied } = effectiveAc(s.baseAc, s.acAdj, s.cond, s.shield);
   const pct = Math.max(0, Math.min(100, (s.hp / maxHp) * 100));
@@ -44,11 +42,6 @@ export function Vitals({ character: c, state: s, canEdit, showLink, token, onPat
     .filter(Boolean)
     .join("\n");
 
-  const readAmount = () => {
-    const n = parseInt(amount, 10);
-    setAmount("");
-    return Number.isFinite(n) && n > 0 ? n : 0;
-  };
 
   return (
     <section className="vitals">
@@ -145,54 +138,20 @@ export function Vitals({ character: c, state: s, canEdit, showLink, token, onPat
           )}
         </div>
         {canEdit ? (
-          <div className="hp-ctrl">
-            <input
-              inputMode="numeric"
-              placeholder="Cant."
-              value={amount}
-              onChange={(e) => setAmount(e.target.value.replace(/\D/g, ""))}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  const n = readAmount();
-                  if (n) onPatch((x) => applyDamage(x, n));
-                }
-              }}
-            />
-            <button
-              className="btn danger"
-              onClick={() => {
-                const n = readAmount();
-                if (n) onPatch((x) => applyDamage(x, n));
-              }}
-            >
-              Daño
-            </button>
-            <button
-              className="btn heal"
-              onClick={() => {
-                const n = readAmount();
-                if (n) onPatch((x) => applyHealing(x, n, effectiveMaxHp(x.maxHp, x.level, x.cond)));
-              }}
-            >
-              Curar
-            </button>
-            <button
-              className="btn ghost"
-              title="PG temporales = cantidad"
-              onClick={() => {
-                const n = readAmount();
-                onPatch((x) => ({ ...x, temp: n }));
-              }}
-            >
-              Temp
-            </button>
+          <DamageBox
+            iwr={s.iwr}
+            shield={s.shield}
+            onDamage={(n, o) => dealDamage({ kind: "pc", id: s.id }, n, o)}
+            onHeal={(n) => healTarget({ kind: "pc", id: s.id }, n)}
+            onTemp={(n) => onPatch((x) => ({ ...x, temp: n }))}
+          >
             {s.acAdj !== 0 && (
               <button className="btn ghost" title="Quitar el ajuste manual de CA" onClick={() => onPatch((x) => ({ ...x, acAdj: 0 }))}>
                 CA {s.acAdj > 0 ? "−" : "+"}
                 {Math.abs(s.acAdj)}
               </button>
             )}
-          </div>
+          </DamageBox>
         ) : null}
         <ConditionRow cond={s.cond} />
       </div>

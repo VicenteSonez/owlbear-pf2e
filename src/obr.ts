@@ -49,18 +49,20 @@ export async function linkToken(itemId: string, c: Pick<Character, "id" | "name"
 }
 
 export function npcToToken(n: NpcState): TokenData {
-  return {
-    kind: "npc",
-    name: n.name,
-    hp: n.hp,
-    maxHp: n.maxHp,
-    temp: n.temp,
-    baseAc: n.baseAc,
-    acAdj: n.acAdj,
-    cond: n.cond,
-    hidden: n.hidden,
-    updatedAt: Date.now(),
-  };
+  const out: TokenData = { ...n, kind: "npc", updatedAt: Date.now() };
+  // Sin listas vacías ni campos sin valor: la metadata de la escena tiene un límite
+  if (!n.attacks.length) delete out.attacks;
+  if (!n.spells.length) delete out.spells;
+  if (!n.level) delete out.level;
+  for (const k of Object.keys(out) as (keyof TokenData)[]) if (out[k] === undefined) delete out[k];
+  return out;
+}
+
+// Todos los PNJ de la escena (para elegir objetivo)
+export async function sceneNpcs(): Promise<{ item: Item; state: NpcState }[]> {
+  if (!(await sceneReady())) return [];
+  const items = await OBR.scene.items.getItems((i) => (i.metadata[META_TOKEN] as TokenData | undefined)?.kind === "npc");
+  return items.map((item) => ({ item, state: npcState(item.metadata[META_TOKEN] as TokenData) }));
 }
 
 // Modifica el estado de un PNJ guardado en su token

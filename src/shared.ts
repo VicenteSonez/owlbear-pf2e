@@ -1,7 +1,7 @@
 import type { Character } from "./pathbuilder";
-import type { Conditions, Degree } from "./rules";
+import type { Conditions, Degree, Iwr, ShieldState } from "./rules";
 import type { Extras } from "./extras";
-import type { RollFx } from "./fx";
+import type { AttackFx, MagicDesign, RollFx } from "./fx";
 
 export const ID = "cl.nacho.pf2e-sheets";
 export const META_TOKEN = `${ID}/token`;
@@ -10,6 +10,46 @@ export const CHANNEL_ROLL = `${ID}/roll`;
 export const OVERLAY_PREFIX = `${ID}-overlay`;
 export const TOAST_POPOVER = `${ID}/toasts`;
 export const TOAST_KEY = "pf2.toasts";
+// Efectos visuales sueltos (p. ej. ataques de PNJ con tirada secreta): todos los ven
+export const CHANNEL_FX = `${ID}/fx`;
+
+export type SaveKey = "fortitude" | "reflex" | "will";
+export const SAVE_LABEL: Record<SaveKey, string> = { fortitude: "Fortaleza", reflex: "Reflejos", will: "Voluntad" };
+
+export interface NpcAttack {
+  id: string;
+  n: string;
+  atk: number;
+  dmg: string;
+  ty: string;
+  melee: boolean;
+  // Arma de Destreza (sutil o a distancia): la penaliza Torpe; las de Fuerza, Débil
+  dex?: boolean;
+  agile?: boolean;
+  fx?: AttackFx | "none";
+}
+
+export type SpellKind = "atk" | "save" | "fx";
+
+export interface NpcSpell {
+  id: string;
+  n: string;
+  kind: SpellKind;
+  save?: SaveKey;
+  basic?: boolean;
+  dmg?: string;
+  ty?: string;
+  heal?: boolean;
+  rank?: number;
+  desc?: string;
+  fx?: MagicDesign;
+}
+
+export interface NpcSaves {
+  fortitude: number;
+  reflex: number;
+  will: number;
+}
 
 // Metadata del token. Para un PJ es solo el vínculo con su hoja (el estado vive en la sala);
 // para un PNJ guarda su estado completo, porque los PNJ son de cada escena.
@@ -28,6 +68,20 @@ export interface TokenData {
   cond?: Conditions;
   // Oculta las estadísticas del PNJ a los jugadores
   hidden?: boolean;
+  level?: number;
+  // Número para distinguir criaturas iguales ("Goblin 2")
+  num?: number;
+  per?: number;
+  saves?: NpcSaves;
+  attacks?: NpcAttack[];
+  spells?: NpcSpell[];
+  spellAtk?: number;
+  spellDc?: number;
+  shield?: ShieldState;
+  iwr?: Iwr;
+  // Objetivo elegido (clave "pc:<id>" o "npc:<tokenId>") y color de su diana
+  target?: string;
+  color?: string;
   // Versiones anteriores guardaban la CA final aquí
   ac?: number;
   updatedAt?: number;
@@ -42,6 +96,18 @@ export interface NpcState {
   acAdj: number;
   cond: Conditions;
   hidden: boolean;
+  level: number;
+  num?: number;
+  per?: number;
+  saves?: NpcSaves;
+  attacks: NpcAttack[];
+  spells: NpcSpell[];
+  spellAtk?: number;
+  spellDc?: number;
+  shield?: ShieldState;
+  iwr?: Iwr;
+  target?: string;
+  color?: string;
 }
 
 export function npcState(d: TokenData): NpcState {
@@ -55,8 +121,23 @@ export function npcState(d: TokenData): NpcState {
     acAdj: d.acAdj ?? (d.ac !== undefined && d.baseAc !== undefined ? d.ac - d.baseAc : 0),
     cond: d.cond ?? {},
     hidden: !!d.hidden,
+    level: d.level ?? 0,
+    num: d.num,
+    per: d.per,
+    saves: d.saves,
+    attacks: d.attacks ?? [],
+    spells: d.spells ?? [],
+    spellAtk: d.spellAtk,
+    spellDc: d.spellDc,
+    shield: d.shield,
+    iwr: d.iwr,
+    target: d.target,
+    color: d.color,
   };
 }
+
+// Nombre con su número: "Goblin 2"
+export const npcLabel = (n: { name: string; num?: number }) => (n.num ? `${n.name} ${n.num}` : n.name);
 
 export interface VitalState {
   hp: number;
@@ -83,7 +164,8 @@ export interface RollEntry {
   formula: string;
   detail: string;
   total: number;
-  kind: "check" | "damage" | "free" | "flat";
+  // "note": aviso sin dado (conjuro lanzado, táctica, runa…)
+  kind: "check" | "damage" | "free" | "flat" | "note";
   nat?: 1 | 20;
   crit?: boolean;
   secret?: boolean;
@@ -97,6 +179,10 @@ export interface RollEntry {
   // Personaje (o mascota) que tiró y efecto a mostrar sobre su token
   charId?: string;
   fx?: RollFx;
+  // Objetivo del ataque o del efecto
+  targetName?: string;
+  // Etiqueta corta en la tarjeta ("Conjuro", "Salvación"…)
+  tag?: string;
 }
 
 // Tarjeta de tirada en la esquina inferior derecha

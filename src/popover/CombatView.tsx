@@ -144,7 +144,7 @@ export function CombatView({ combat, entries, isGm, own, ownState, npcStates, al
                 {isGm ? <InitInput value={e.init} onCommit={(v) => actions.setInit(e, v)} /> : <b className="ie-init">{e.init ?? "—"}</b>}
                 <div className="ie-main">
                   <div className="ie-name">
-                    <b>{e.name}</b>
+                    <b>{npc?.num ? `${e.name} ${npc.num}` : e.name}</b>
                     {e.kind === "npc" && <span className="badge">PNJ</span>}
                     {e.hidden && <span className="badge">oculto</span>}
                     {e.pc?.init?.winsTies && (
@@ -160,7 +160,7 @@ export function CombatView({ combat, entries, isGm, own, ownState, npcStates, al
                     {e.pc && e.pc.wounded > 0 && <CondIcon icon="wounded" label="Herido" value={e.pc.wounded} size={15} />}
                   </div>
                   {e.pc && <HpBar hp={e.pc.hp} max={effectiveMaxHp(e.pc.maxHp, e.pc.level, e.pc.cond)} dying={e.pc.dying} />}
-                  {showNpcHp && <HpBar hp={npc.hp} max={npc.maxHp} />}
+                  {showNpcHp && <HpBar hp={npc.hp} max={effectiveMaxHp(npc.maxHp, npc.level, npc.cond)} />}
                   <ConditionRow cond={cond} size={15} />
                 </div>
                 {isGm && (

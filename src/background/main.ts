@@ -3,13 +3,14 @@ import { autoLinkCandidate, linkToken, npcToToken, publishPlayer, roomId, tokenD
 import { store } from "../storage";
 import { extrasStore } from "../extras";
 import { watchForUpdates } from "../autoUpdate";
-import { live, needsSheetSync, seedState, syncSheet } from "../live";
+import { live, needsSheetSync, pcColor, randomColor, seedState, syncSheet } from "../live";
 import { combatStore, npcKey, pcKey, type Combat } from "../combat";
-import { playAttack, playOnToken, resetFx } from "./fx";
-import type { FxKind } from "../fx";
+import { playAttack, playAttackTo, playOnToken, resetFx } from "./fx";
+import type { FxKind, RollFx } from "../fx";
 import type { PcState } from "../live";
 import { DEATH_DYING, activeConditionIcons, effectiveAc, effectiveMaxHp } from "../rules";
 import {
+  CHANNEL_FX,
   CHANNEL_ROLL,
   ID,
   META_TOKEN,
@@ -117,7 +118,7 @@ async function setupContextMenus() {
     ],
     async onClick(context) {
       const item = context.items[0];
-      const data = npcToToken({ name: item.name, hp: 20, maxHp: 20, temp: 0, baseAc: 15, acAdj: 0, cond: {}, hidden: true });
+      const data = npcToToken({ name: item.name, hp: 20, maxHp: 20, temp: 0, baseAc: 15, acAdj: 0, cond: {}, hidden: true, level: 0, attacks: [], spells: [], color: randomColor() });
       await OBR.scene.items.updateItems([item.id], (drafts) => {
         for (const d of drafts) d.metadata[META_TOKEN] = data;
       });
@@ -201,6 +202,8 @@ function setupRolls() {
     addToast(entry);
     playRollFx(entry);
   });
+  // Efectos sueltos (ataques de PNJ con tirada secreta, rasgos de clase…)
+  OBR.broadcast.onMessage(CHANNEL_FX, (event) => playFxMessage(event.data as RollFx));
   // La ventana de tarjetas escribe aquí al cerrar una tarjeta o limpiar todas
   window.addEventListener("storage", (e) => {
     if (e.key === TOAST_KEY) syncToasts();
@@ -218,40 +221,67 @@ interface TokenView {
   dead: boolean;
   icons: { icon: string; value?: number }[];
   hiddenNpc: boolean;
+  num?: number;
 }
 
-function viewFor(d: TokenData): TokenView | null {
+// Marcas que los PJ dejan sobre un PNJ: presa, provocado, vulnerabilidad explotada, siervo
+function classMarks(tokenId: string): TokenView["icons"] {
+  const out: TokenView["icons"] = [];
+  for (const s of Object.values(live.all())) {
+    const k = s.cls;
+    if (!k) continue;
+    if (k.prey === tokenId) out.push({ icon: "prey" });
+    if (k.taunt === tokenId) out.push({ icon: "taunt" });
+    if (k.exploit?.tok === tokenId) out.push({ icon: "exploit" });
+    if (k.thralls?.some((t) => t.tok === tokenId)) out.push({ icon: "thrall" });
+  }
+  return out;
+}
+
+function viewFor(item: Item, d: TokenData): TokenView | null {
   if (d.kind === "pc") {
     const s = d.characterId ? live.get(d.characterId) : undefined;
     if (!s) return null;
+    // El eidolón muestra los PG de su invocador
+    const hpS = (s.pet?.shared && live.get(s.pet.parent)) || s;
     const ac = effectiveAc(s.baseAc, s.acAdj, s.cond, s.shield).ac;
     const icons: TokenView["icons"] = [];
-    if (s.dying > 0) icons.push({ icon: s.dying >= DEATH_DYING ? "dead" : "dying", value: s.dying });
-    if (s.wounded > 0) icons.push({ icon: "wounded", value: s.wounded });
+    if (hpS.dying > 0) icons.push({ icon: hpS.dying >= DEATH_DYING ? "dead" : "dying", value: hpS.dying });
+    if (hpS.wounded > 0) icons.push({ icon: "wounded", value: hpS.wounded });
     if (s.shield?.raised) icons.push({ icon: "shield", value: s.shield.bonus });
+    if (s.cls?.rage) icons.push({ icon: "rage" });
+    if (s.cls?.panache) icons.push({ icon: "panache" });
+    if (s.cls?.aura) icons.push({ icon: "aura" });
+    if (s.cls?.psyche) icons.push({ icon: "psyche", value: s.cls.psyche });
     icons.push(...activeConditionIcons(s.cond).map((c) => ({ icon: c.icon, value: c.value })));
+    icons.push(...classMarks(item.id));
     return {
-      hp: s.hp,
-      maxHp: effectiveMaxHp(s.maxHp, s.level, s.cond),
-      temp: s.temp,
+      hp: hpS.hp,
+      maxHp: effectiveMaxHp(hpS.maxHp, hpS.level, hpS.cond),
+      temp: hpS.temp,
       ac,
       acChanged: ac !== s.baseAc,
-      dead: s.dying >= DEATH_DYING,
+      dead: hpS.dying >= DEATH_DYING,
       icons,
       hiddenNpc: false,
     };
   }
   const n = npcState(d);
-  const ac = effectiveAc(n.baseAc, n.acAdj, n.cond).ac;
+  const ac = effectiveAc(n.baseAc, n.acAdj, n.cond, n.shield).ac;
+  const icons: TokenView["icons"] = [];
+  if (n.shield?.raised) icons.push({ icon: "shield", value: n.shield.bonus });
+  icons.push(...activeConditionIcons(n.cond).map((c) => ({ icon: c.icon, value: c.value })));
+  icons.push(...classMarks(item.id));
   return {
     hp: n.hp,
-    maxHp: n.maxHp,
+    maxHp: effectiveMaxHp(n.maxHp, n.level, n.cond),
     temp: n.temp,
     ac,
     acChanged: ac !== n.baseAc,
     dead: false,
-    icons: activeConditionIcons(n.cond).map((c) => ({ icon: c.icon, value: c.value })),
+    icons,
     hiddenNpc: n.hidden,
+    num: n.num,
   };
 }
 
@@ -383,6 +413,42 @@ async function buildOverlay(item: Item, v: TokenView): Promise<Item[]> {
       .build(),
   );
 
+  // Número del PNJ (Goblin 2) a la derecha de la barra
+  if (v.num) {
+    const ns = h * 1.6;
+    const nc = { x: x + w + ns * 0.4, y: y + h / 2 };
+    out.push(
+      common(buildShape().id(partId(item.id, "num")))
+        .shapeType("CIRCLE")
+        .width(ns)
+        .height(ns)
+        .position(nc)
+        .fillColor("#23272f")
+        .fillOpacity(0.95)
+        .strokeColor("#d4a72c")
+        .strokeWidth(dpi * 0.015)
+        .zIndex(z++)
+        .build(),
+      common(buildText().id(partId(item.id, "numtext")))
+        .textType("PLAIN")
+        .plainText(String(v.num))
+        .width(ns)
+        .height(ns)
+        .position({ x: nc.x - ns / 2, y: nc.y - ns / 2 })
+        .padding(0)
+        .fontSize(ns * 0.55)
+        .fontWeight(800)
+        .fontFamily("Roboto, Arial, sans-serif")
+        .textAlign("CENTER")
+        .textAlignVertical("MIDDLE")
+        .fillColor("#ffffff")
+        .strokeColor("#000000")
+        .strokeWidth(dpi * 0.01)
+        .zIndex(z++)
+        .build(),
+    );
+  }
+
   // Fila de íconos (condiciones, moribundo, escudo alzado) sobre la barra
   if (v.icons.length) {
     // Crecen con el token (criaturas grandes) pero sin pasar de media casilla
@@ -455,7 +521,7 @@ async function syncOverlays(items: Item[]) {
     const wanted = new Map<string, { item: Item; view: TokenView }>();
     for (const item of items) {
       const d = tokenData(item);
-      const v = d ? viewFor(d) : null;
+      const v = d ? viewFor(item, d) : null;
       if (v && shouldShow(item, v)) wanted.set(item.id, { item, view: v });
     }
     const toDelete: string[] = [];
@@ -482,6 +548,7 @@ async function syncOverlays(items: Item[]) {
     }
     if (toAdd.length) await OBR.scene.local.addItems(toAdd);
     await syncTurnRing();
+    await syncTargets(items);
   } catch (err) {
     console.error("[PF2e] Error dibujando barras", err);
   } finally {
@@ -492,6 +559,93 @@ async function syncOverlays(items: Item[]) {
       syncOverlays(next);
     }
   }
+}
+
+// ---------- Dianas: cada PJ (y PNJ) marca a su objetivo con su color ----------
+
+const targetsDrawn = new Map<string, { sig: string; ids: string[] }>();
+
+interface TargetMark {
+  key: string;
+  color: string;
+  tokenId: string;
+}
+
+function wantedTargets(items: Item[]): TargetMark[] {
+  const out: TargetMark[] = [];
+  const visible = (id: string) => {
+    const it = items.find((i) => i.id === id);
+    return !!it && (it.visible || role === "GM");
+  };
+  for (const s of Object.values(live.all())) {
+    if (s.target && visible(s.target)) out.push({ key: `pc-${s.id}`, color: pcColor(s), tokenId: s.target });
+  }
+  for (const item of items) {
+    const d = tokenData(item);
+    if (d?.kind !== "npc" || !d.target?.startsWith("pc:")) continue;
+    if (!item.visible && role !== "GM") continue;
+    const tok = pcToken(d.target.slice(3));
+    if (tok && visible(tok.id)) out.push({ key: `npc-${item.id}`, color: d.color ?? "#ff3030", tokenId: tok.id });
+  }
+  return out;
+}
+
+async function syncTargets(items: Item[]) {
+  const wanted = wantedTargets(items);
+  // Varias dianas sobre el mismo token se dibujan una dentro de otra
+  const perToken = new Map<string, number>();
+  const toDelete: string[] = [];
+  const toAdd: Item[] = [];
+  const keys = new Set(wanted.map((t) => t.key));
+  for (const [k, r] of [...targetsDrawn]) {
+    if (!keys.has(k)) {
+      toDelete.push(...r.ids);
+      targetsDrawn.delete(k);
+    }
+  }
+  for (const t of wanted) {
+    const item = items.find((i) => i.id === t.tokenId);
+    if (!item) continue;
+    const slot = perToken.get(t.tokenId) ?? 0;
+    perToken.set(t.tokenId, slot + 1);
+    const sig = JSON.stringify([t.tokenId, t.color, slot, item.scale, item.visible, dpi]);
+    const prev = targetsDrawn.get(t.key);
+    if (prev?.sig === sig) continue;
+    if (prev) toDelete.push(...prev.ids);
+    const b = await OBR.scene.items.getItemBounds([item.id]);
+    const base = Math.max(b.width, b.height) * (0.62 + slot * 0.14);
+    const ring = (part: string, size: number, width: number, fill = false) =>
+      buildShape()
+        .id(`${OVERLAY_PREFIX}-tgt-${t.key}-${part}`)
+        .shapeType("CIRCLE")
+        .width(size)
+        .height(size)
+        .position(b.center)
+        .fillColor(t.color)
+        .fillOpacity(fill ? 0.85 : 0)
+        .strokeColor(t.color)
+        .strokeOpacity(0.9)
+        .strokeWidth(width)
+        .attachedTo(item.id)
+        .layer("ATTACHMENT")
+        .locked(true)
+        .disableHit(true)
+        .visible(item.visible)
+        .disableAttachmentBehavior(["ROTATION", "SCALE", "LOCKED", "COPY"])
+        .zIndex(2 + slot)
+        .build();
+    const built = slot
+      ? [ring("a", base, dpi * 0.035)]
+      : [ring("a", base, dpi * 0.035), ring("b", base * 0.62, dpi * 0.03), ring("c", base * 0.16, 0, true)];
+    toAdd.push(...built);
+    targetsDrawn.set(t.key, { sig, ids: built.map((x) => x.id) });
+  }
+  if (toDelete.length) {
+    const existing = new Set((await OBR.scene.local.getItems()).map((i) => i.id));
+    const del = toDelete.filter((id) => existing.has(id));
+    if (del.length) await OBR.scene.local.deleteItems(del);
+  }
+  if (toAdd.length) await OBR.scene.local.addItems(toAdd);
 }
 
 // ---------- Turno actual: anillo dorado en su token y aviso a su jugador ----------
@@ -566,14 +720,30 @@ function fx(kind: FxKind, item: Item | undefined) {
   playOnToken(kind, item!.id).catch((err) => console.error("[PF2e] Error con un efecto", err));
 }
 
+// "pc:<id>" (PJ o mascota) o el id de un token
+function resolveToken(ref: string | undefined): Item | undefined {
+  if (!ref) return undefined;
+  if (ref.startsWith("pc:")) return pcToken(ref.slice(3));
+  if (ref.startsWith("npc:")) return lastItems.find((i) => i.id === ref.slice(4));
+  return lastItems.find((i) => i.id === ref);
+}
+
+function playFxMessage(f: RollFx, fallbackFrom?: string) {
+  const from = resolveToken(f.from ?? fallbackFrom);
+  if (!visibleToMe(from)) return;
+  const to = resolveToken(f.to);
+  let play: Promise<void>;
+  if (to && visibleToMe(to) && to.id !== from!.id) play = playAttackTo(f.kind, from!.id, to.id, f.color);
+  else if (f.dir !== undefined) play = playAttack(f.kind, from!.id, f.dir, f.color);
+  else play = playOnToken(f.kind, from!.id, f.color);
+  play.catch((err) => console.error("[PF2e] Error con un efecto", err));
+}
+
 // Ataques y conjuros: el efecto viaja con la tirada
 function playRollFx(entry: RollEntry) {
-  if (!entry.fx || !entry.charId) return;
-  const item = pcToken(entry.charId);
-  if (!visibleToMe(item)) return;
-  const play =
-    entry.fx.dir === undefined ? playOnToken(entry.fx.kind, item!.id) : playAttack(entry.fx.kind, item!.id, entry.fx.dir);
-  play.catch((err) => console.error("[PF2e] Error con un efecto", err));
+  if (!entry.fx) return;
+  if (!entry.fx.from && !entry.charId) return;
+  playFxMessage(entry.fx, entry.charId ? `pc:${entry.charId}` : undefined);
 }
 
 interface VitalSnap {
@@ -619,6 +789,7 @@ function detectNpcFx(items: Item[]) {
 
 async function resetOverlays() {
   rendered.clear();
+  targetsDrawn.clear();
   resetFx();
   ringSig = null;
   if (!(await OBR.scene.isReady())) return;
@@ -643,6 +814,7 @@ function setupOverlays() {
   OBR.scene.onReadyChange(async (ready) => {
     if (!ready) {
       rendered.clear();
+      targetsDrawn.clear();
       lastItems = [];
       prevNpc = null;
       return;

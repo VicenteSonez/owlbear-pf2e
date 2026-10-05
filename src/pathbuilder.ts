@@ -36,6 +36,10 @@ export interface Weapon {
   ranged: boolean;
   // Incremento de alcance en pies (solo armas a distancia)
   range?: number;
+  // Bomba alquímica genérica del alquimista (daño editable)
+  bomb?: boolean;
+  // Fórmula de daño escrita a mano (reemplaza los dados del arma)
+  dmgFormula?: string;
 }
 
 export interface ShieldInfo {
@@ -78,13 +82,15 @@ export interface Item {
 
 export interface Pet {
   name: string;
-  // "Animal Companion", "Familiar", "Eidolon"…
+  // "Animal Companion", "Familiar", "Eidolon", "Construct Companion"…
   type: string;
   animal?: string;
+  // Habilidades de familiar que trae Pathbuilder
+  abilities?: string[];
 }
 
 // Sube este número cuando el lector cambie: las hojas guardadas se vuelven a leer solas
-export const PARSER_VERSION = 3;
+export const PARSER_VERSION = 4;
 
 export interface Character {
   parserVersion?: number;
@@ -289,10 +295,19 @@ export function parsePathbuilder(raw: unknown): Character {
   };
 
   const skills = SKILLS.map(([k, label, ab]) => stat(k, label, ab, prof[k]));
+  // Saber esotérico del taumaturgo: usa Carisma en vez de Inteligencia
+  const featList: string[] = (Array.isArray(b.feats) ? b.feats : []).map((f: unknown[]) => String(f?.[0] ?? "").toLowerCase());
+  const specialList: string[] = (Array.isArray(b.specials) ? b.specials : []).map((x: unknown) => String(x).toLowerCase());
+  const hasEsoteric = [...featList, ...specialList].includes("esoteric lore");
   const lores: Stat[] = (Array.isArray(b.lores) ? b.lores : []).map((l: unknown[]) => {
     const name = String(l[0]);
-    return stat(`lore:${name}`, `Saber: ${name}`, "int", l[1], `${name} Lore`);
+    const esoteric = /esoteric/i.test(name);
+    return stat(`lore:${name}`, esoteric ? "Saber esotérico" : `Saber: ${name}`, esoteric ? "cha" : "int", l[1], `${name} Lore`);
   });
+  if (hasEsoteric && !lores.some((l) => /esoteric/i.test(l.key))) {
+    const rank = level >= 15 ? 8 : level >= 7 ? 6 : level >= 3 ? 4 : 2;
+    lores.push(stat("lore:Esoteric", "Saber esotérico", "cha", rank, "Esoteric Lore"));
+  }
 
   const attrs: Json = b.attributes ?? {};
   const maxHp =
@@ -320,6 +335,26 @@ export function parsePathbuilder(raw: unknown): Character {
       range: ranged?.[1],
     };
   });
+
+  // Alquimista: bomba genérica a distancia (Destreza, 20 ft, 1d6 sin tipo; el daño se edita)
+  if (/alchemist/i.test(String(b.class))) {
+    const simple = toRank(prof.simple);
+    weapons.push({
+      name: "Bomba alquímica",
+      key: "bomba alquimica",
+      attack: abilities.dex + profBonus(simple),
+      diceCount: 1,
+      dieSides: 6,
+      damageBonus: 0,
+      damageType: "",
+      extra: [],
+      agile: false,
+      finesse: false,
+      ranged: true,
+      range: 20,
+      bomb: true,
+    });
+  }
 
   // Sentidos: en "specials" o en el nombre de alguna dote
   const traitNames: string[] = [
@@ -454,8 +489,18 @@ export function parsePathbuilder(raw: unknown): Character {
     ...(Array.isArray(b.familiars) ? b.familiars : []).map((p: Json) => ({
       name: String(p.name || "Familiar"),
       type: String(p.type || "Familiar"),
+      abilities: Array.isArray(p.abilities) ? p.abilities.map(String) : undefined,
     })),
   ];
+  // El invocador siempre tiene eidolón y el inventor de constructo, su compañero
+  const allNames = [...featList, ...specialList];
+  if (/summoner/i.test(String(b.class)) && !pets.some((p) => /eidolon/i.test(p.type))) {
+    const kind = allNames.find((n) => /eidolon/.test(n) && !/boost|dedication|reinforce|share/.test(n));
+    pets.push({ name: "Eidolón", type: "Eidolon", animal: kind ? kind.replace(/(^|\s)\w/g, (m) => m.toUpperCase()) : undefined });
+  }
+  if (allNames.includes("construct innovation") && !pets.some((p) => /construct/i.test(p.type))) {
+    pets.push({ name: "Constructo", type: "Construct Companion" });
+  }
 
   const keyAb = (String(b.keyability ?? "str").slice(0, 3) as Ability) || "str";
   const name = String(b.name ?? "Personaje");

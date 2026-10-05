@@ -7,8 +7,9 @@ import OBR from "@owlbear-rodeo/sdk";
 import type { Character } from "./pathbuilder";
 import { ID } from "./shared";
 import { inOwlbear, whenReady } from "./obr";
-import { effectiveMaxHp, type Conditions, type ShieldState, type Vitals } from "./rules";
+import { effectiveMaxHp, type Conditions, type Iwr, type ShieldState, type Vitals } from "./rules";
 import type { InitRoll } from "./combat";
+import type { ClassState } from "./classes";
 
 export const META_PC_PREFIX = `${ID}/pc/`;
 const LOCAL_KEY = "pf2.live.local";
@@ -31,8 +32,15 @@ export interface PcState extends Vitals {
   init?: InitRoll;
   // Recursos que el GM también puede tocar: foco, espacios de conjuro, alquimia
   res?: Resources;
-  // Mascota o compañero de otro PJ: no tira iniciativa propia
-  pet?: { parent: string; index: number; type: string };
+  // Mascota o compañero de otro PJ: no tira iniciativa propia.
+  // shared: comparte los PG con su PJ (eidolón)
+  pet?: { parent: string; index: number; type: string; shared?: boolean };
+  // Color de su diana sobre el objetivo, y token del PNJ elegido como objetivo
+  color?: string;
+  target?: string;
+  iwr?: Iwr;
+  // Rasgos de clase activos (Furia, Panache, presa…)
+  cls?: ClassState;
   t: number;
 }
 
@@ -49,6 +57,23 @@ export interface Resources {
 }
 
 export const petStateId = (charId: string, index: number) => `${charId}~p${index}`;
+
+// Colores de las dianas de objetivo: uno al azar por PJ
+export const TARGET_COLORS = ["#e8622c", "#4aa3ff", "#3fae5a", "#d4a72c", "#c74ddb", "#2ec4b6", "#ff5d8f", "#a3d13a", "#f2f2f2", "#8f7cff"];
+export const randomColor = () => TARGET_COLORS[Math.floor(Math.random() * TARGET_COLORS.length)];
+
+export function pcColor(s: { id: string; color?: string }) {
+  if (s.color) return s.color;
+  let h = 0;
+  for (let i = 0; i < s.id.length; i++) h = (Math.imul(31, h) + s.id.charCodeAt(i)) | 0;
+  return TARGET_COLORS[Math.abs(h) % TARGET_COLORS.length];
+}
+
+// Ajustes automáticos al guardar: el Aura cinética se apaga al caer a 0 PG
+function normalize(s: PcState): PcState {
+  if (s.hp <= 0 && s.cls?.aura) return { ...s, cls: { ...s.cls, aura: undefined } };
+  return s;
+}
 
 export function seedState(c: Character, owner?: { id: string; name: string }, prev?: { hp: number; temp: number }): PcState {
   return {
@@ -67,6 +92,7 @@ export function seedState(c: Character, owner?: { id: string; name: string }, pr
     dying: 0,
     wounded: 0,
     hero: 3,
+    color: randomColor(),
     shield: c.shield && c.shield.hp > 0
       ? { name: c.shield.name, bonus: c.shield.bonus, hardness: c.shield.hardness, hp: c.shield.hp, maxHp: c.shield.hp, raised: false }
       : undefined,
@@ -157,8 +183,14 @@ class LiveStore {
     return this.states[id];
   }
 
+  // Quien guarda los PG de este estado: el eidolón usa los de su invocador
+  hpHolder(id: string): string {
+    const s = this.states[id];
+    return s?.pet?.shared && this.states[s.pet.parent] ? s.pet.parent : id;
+  }
+
   async write(state: PcState) {
-    const next = { ...state, t: Date.now() };
+    const next = normalize({ ...state, t: Date.now() });
     this.states = { ...this.states, [next.id]: next };
     this.emit();
     if (inOwlbear) await OBR.room.setMetadata({ [META_PC_PREFIX + next.id]: next });
