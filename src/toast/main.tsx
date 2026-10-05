@@ -11,14 +11,15 @@ import "../styles.css";
 
 function Card({ item, onDismiss }: { item: ToastItem; onDismiss: () => void }) {
   const e = item.entry;
-  const hidden = e.total === null || Number.isNaN(e.total);
+  const note = e.kind === "note";
+  const hidden = !note && (e.total === null || Number.isNaN(e.total));
   const who = e.charName ? `${e.playerName} · ${e.charName}` : e.playerName;
   const degree = e.degree ? `${DEGREE_LABEL[e.degree]}${e.dc ? ` · CD ${e.dc}` : ""}` : "";
   const tag =
-    e.secret ? "🔒 secreta" : degree || (e.nat === 20 ? "20 natural" : e.nat === 1 ? "1 natural" : e.crit ? "crítico" : "");
+    e.secret ? "🔒 secreta" : degree || e.tag || (e.nat === 20 ? "20 natural" : e.nat === 1 ? "1 natural" : e.crit ? "crítico" : "");
   return (
     <div
-      className={`toast ${e.nat === 20 ? "nat20" : e.nat === 1 ? "nat1" : ""} ${e.degree ? (e.degree.includes("success") ? "ok" : "fail") : ""}`}
+      className={`toast ${note ? "note" : ""} ${e.nat === 20 ? "nat20" : e.nat === 1 ? "nat1" : ""} ${e.degree ? (e.degree.includes("success") ? "ok" : "fail") : ""}`}
       style={{ "--toast-color": e.diceColor ?? e.playerColor } as CSSProperties}
       onClick={onDismiss}
       title="Clic para cerrar"
@@ -30,15 +31,19 @@ function Card({ item, onDismiss }: { item: ToastItem; onDismiss: () => void }) {
       </div>
       <div className="t-body">
         <div className="t-text">
-          <div className="t-label">{e.label}</div>
-          {!hidden && (
+          <div className="t-label">
+            {e.label}
+            {e.targetName ? <span className="t-target"> → {e.targetName}</span> : null}
+          </div>
+          {note && e.detail && <div className="t-detail">{e.detail}</div>}
+          {!note && !hidden && (
             <div className="t-detail">
               {e.formula}: {e.detail}
               {e.notes ? ` · ${e.notes}` : ""}
             </div>
           )}
         </div>
-        {hidden ? <div className="t-secret">🔒 Enviada al GM</div> : <div className="t-total">{e.total}</div>}
+        {note ? null : hidden ? <div className="t-secret">🔒 Enviada al GM</div> : <div className="t-total">{e.total}</div>}
       </div>
     </div>
   );

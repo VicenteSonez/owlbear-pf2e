@@ -1,15 +1,18 @@
 import { useState } from "react";
-import { PROF_LABEL, damageFormula, fmtMod, mapSteps, type Character, type Stat, type Weapon } from "../pathbuilder";
+import { PROF_LABEL, fmtMod, type Character, type Stat } from "../pathbuilder";
 import type { RollEntry } from "../shared";
 import type { PcState } from "../live";
-import { checkAdjust, effectiveMaxHp, modsText, type RollCtx } from "../rules";
-import { applyWeaponFlags, extraKey, store, type WeaponFlags } from "../storage";
+import type { Extras } from "../extras";
+import { checkAdjust, effectiveMaxHp, modsText, stackMods, type Mod, type RollCtx } from "../rules";
+import { OUTWIT_SKILLS, featuresOf } from "../classes";
+import { dealDamage } from "../damage";
 import type { RollRequest } from "./App";
 import { LogList } from "./LogList";
 import { ShieldCard } from "./ShieldCard";
 import { speedTitle } from "./Vitals";
-import { FxDir } from "./FxDir";
-import { ATTACK_FX, defaultWeaponFx, type AttackFx } from "../fx";
+import { AttacksTab } from "./AttacksTab";
+import { IwrEditor } from "./DamageBox";
+import { classSpeed } from "./ClassBar";
 
 type Tab = "attacks" | "skills" | "defense" | "spells" | "log";
 
@@ -17,6 +20,9 @@ interface Props {
   character: Character;
   state?: PcState;
   canEdit: boolean;
+  extras: Extras;
+  canEditExtras: boolean;
+  updateExtras: (fn: (e: Extras) => Extras) => void;
   onRoll: (r: RollRequest) => void;
   onPatch: (fn: (s: PcState) => PcState) => void;
   log: RollEntry[];
@@ -26,8 +32,6 @@ interface Props {
 const ABILITY_LABEL: Record<string, string> = {
   str: "FUE", dex: "DES", con: "CON", int: "INT", wis: "SAB", cha: "CAR",
 };
-
-const MAP_LABEL = ["1er ataque", "2º ataque", "3er ataque"];
 
 function Rank({ prof }: { prof: number }) {
   return <span className={`rank r${prof}`}>{PROF_LABEL[prof] ?? "U"}</span>;
@@ -43,40 +47,25 @@ function Val({ base, value, notes }: { base: number; value: number; notes?: stri
   );
 }
 
-const weaponKey = (w: Weapon) => w.key ?? w.name.toLowerCase();
-
-export function SheetTabs({ character: c, state, canEdit, onRoll, onPatch, log, onClearLog }: Props) {
+export function SheetTabs(props: Props) {
+  const { character: c, state, canEdit, onRoll, onPatch, log, onClearLog } = props;
   const [tab, setTab] = useState<Tab>("attacks");
-  const [flags, setFlags] = useState<Record<string, WeaponFlags>>(() => store.weaponFlags(c.id));
-  const [flagsFor, setFlagsFor] = useState(c.id);
-  if (flagsFor !== c.id) {
-    setFlagsFor(c.id);
-    setFlags(store.weaponFlags(c.id));
-  }
+  // Bonos de explorador que se activan a mano: Cazar presa y Burlar
+  const [huntBonus, setHuntBonus] = useState(false);
+  const [outwitBonus, setOutwitBonus] = useState(false);
+  const f = featuresOf(c);
 
-  const weapons = c.weapons.map((w) => applyWeaponFlags(w, flags[weaponKey(w)]));
-  // Efectos de ataque en el mapa: dirección elegida y efecto de cada arma
-  const [fxPref, setFxPrefState] = useState(() => store.fxPref(c.id));
-  const [fxFor, setFxFor] = useState(c.id);
-  if (fxFor !== c.id) {
-    setFxFor(c.id);
-    setFxPrefState(store.fxPref(c.id));
-  }
-  const setFxPref = (p: { dir: number; on: boolean }) => {
-    setFxPrefState(p);
-    store.setFxPref(c.id, p);
+  // Bonificadores de las condiciones activas (y de los bonos manuales) para cada tirada
+  const extraMods = (ctx: RollCtx): Mod[] => {
+    const out: Mod[] = [];
+    const key = ctx.kind === "perception" ? "perception" : ctx.kind === "skill" ? ctx.key : "";
+    if (huntBonus && (key === "perception" || key === "survival")) out.push({ label: "Cazar presa", type: "circumstance", value: 2 });
+    if (outwitBonus && OUTWIT_SKILLS.includes(key)) out.push({ label: "Burlar", type: "circumstance", value: 2 });
+    return out;
   };
-  const fxOf = (w: Weapon): AttackFx | "none" => flags[weaponKey(w)]?.fx ?? defaultWeaponFx(w);
-  const setFlag = (w: Weapon, patch: WeaponFlags) => {
-    const key = weaponKey(w);
-    const next = { ...flags, [key]: { ...flags[key], ...patch } };
-    setFlags(next);
-    store.setWeaponFlags(c.id, next);
-  };
-
-  // Bonificadores de las condiciones activas para cada tipo de tirada
   const adjust = (base: number, ctx: RollCtx) => {
-    const a = checkAdjust(state?.cond, ctx, state?.shield);
+    const cond = checkAdjust(state?.cond, ctx, state?.shield).applied;
+    const a = stackMods([...cond, ...extraMods(ctx)]);
     return { value: base + a.total, notes: modsText(a.applied) };
   };
   const rollCheck = (label: string, base: number, ctx: RollCtx) => {
@@ -88,31 +77,6 @@ export function SheetTabs({ character: c, state, canEdit, onRoll, onPatch, log, 
   const statCtx = (s: Stat): RollCtx => ({ kind: "skill", key: s.key.startsWith("lore:") ? "lore" : s.key, ability: s.ability ?? "int" });
   const saveCtx = (s: Stat): RollCtx => ({ kind: "save", key: s.key as "fortitude" | "reflex" | "will" });
 
-  const rollWeapon = (w: Weapon, what: "attack" | "damage" | "crit", mapIndex = 0) => {
-    const melee = !w.ranged;
-    if (what === "attack") {
-      const a = adjust(w.attack, { kind: "attack", melee, finesse: w.finesse });
-      const step = mapSteps({ ...w, attack: a.value })[mapIndex];
-      const fx = fxOf(w);
-      onRoll({
-        label: `${w.name}: ${MAP_LABEL[mapIndex]}`,
-        formula: `1d20${fmtMod(step)}`,
-        kind: "check",
-        notes: a.notes || undefined,
-        fx: fxPref.on && fx !== "none" ? { kind: fx, dir: fxPref.dir } : undefined,
-      });
-      return;
-    }
-    const pen = checkAdjust(state?.cond, { kind: "damage", melee });
-    onRoll({
-      label: `${w.name}: ${what === "crit" ? "Crítico" : "Daño"}${w.damageType ? ` (${w.damageType})` : ""}`,
-      formula: damageFormula(w) + (pen.total ? fmtMod(pen.total) : ""),
-      kind: "damage",
-      crit: what === "crit",
-      notes: modsText(pen.applied) || undefined,
-    });
-  };
-
   const tabs: [Tab, string][] = [
     ["attacks", "Ataques"],
     ["skills", "Habilidades"],
@@ -122,6 +86,7 @@ export function SheetTabs({ character: c, state, canEdit, onRoll, onPatch, log, 
   ];
 
   const perception = adjust(c.perception.mod, { kind: "perception" });
+  const speed = classSpeed(c, state);
 
   return (
     <section className="tabs">
@@ -134,137 +99,33 @@ export function SheetTabs({ character: c, state, canEdit, onRoll, onPatch, log, 
       </nav>
       <div className="tab-body">
         {tab === "attacks" && (
-          <>
-            {weapons.length === 0 && !c.impulse && <p className="muted">Este personaje no tiene armas en Pathbuilder.</p>}
-            {weapons.length > 0 && (
-              <div className="fx-row">
-                <div>
-                  <b>Efecto en el mapa</b>
-                  <span className="muted small">
-                    {fxPref.on ? "Elige hacia dónde atacas; se ve al tirar el ataque." : "Apagado: los ataques no muestran efecto."}
-                  </span>
-                </div>
-                <FxDir dir={fxPref.dir} on={fxPref.on} onChange={setFxPref} />
-              </div>
-            )}
-            {weapons.map((w) => {
-              const atk = adjust(w.attack, { kind: "attack", melee: !w.ranged, finesse: w.finesse });
-              const steps = mapSteps({ ...w, attack: atk.value });
-              const pen = checkAdjust(state?.cond, { kind: "damage", melee: !w.ranged });
-              return (
-                <div key={weaponKey(w)} className="weapon">
-                  <div className="weapon-head">
-                    <b>{w.name}</b>
-                    <span className="muted small">
-                      {damageFormula(w)}
-                      {pen.total ? fmtMod(pen.total) : ""} {w.damageType}
-                    </span>
-                  </div>
-                  <div className="extras">
-                    <button className={`chip ${w.agile ? "on" : ""}`} onClick={() => setFlag(w, { agile: !w.agile })} title="Ágil: penalizador por ataque múltiple −4/−8">
-                      Ágil
-                    </button>
-                    {!w.ranged && (
-                      <button className={`chip ${w.finesse ? "on" : ""}`} onClick={() => setFlag(w, { finesse: !w.finesse })} title="Sutil: Torpe penaliza su ataque">
-                        Sutil
-                      </button>
-                    )}
-                    <button className={`chip ${w.ranged ? "on" : ""}`} onClick={() => setFlag(w, { ranged: !w.ranged })} title="A distancia o cuerpo a cuerpo">
-                      {w.ranged ? "A distancia" : "Cuerpo a cuerpo"}
-                    </button>
-                    {w.ranged && (
-                      <label className="range" title="Incremento de alcance">
-                        Alcance
-                        <input
-                          inputMode="numeric"
-                          value={w.range ?? ""}
-                          placeholder="—"
-                          onChange={(e) => {
-                            const v = parseInt(e.target.value.replace(/\D/g, ""), 10);
-                            setFlag(w, { range: Number.isFinite(v) ? v : undefined });
-                          }}
-                        />
-                        ft
-                      </label>
-                    )}
-                    <select
-                      className="fx-select"
-                      value={fxOf(w)}
-                      title="Efecto visual de este ataque"
-                      onChange={(e) => setFlag(w, { fx: e.target.value as AttackFx | "none" })}
-                    >
-                      <option value="none">✦ Sin efecto</option>
-                      <optgroup label="Cuerpo a cuerpo">
-                        {ATTACK_FX.filter((f) => !f.ranged).map((f) => (
-                          <option key={f.id} value={f.id}>
-                            ✦ {f.label}
-                          </option>
-                        ))}
-                      </optgroup>
-                      <optgroup label="A distancia">
-                        {ATTACK_FX.filter((f) => f.ranged).map((f) => (
-                          <option key={f.id} value={f.id}>
-                            ✦ {f.label}
-                          </option>
-                        ))}
-                      </optgroup>
-                    </select>
-                    {w.extra.map((e) => (
-                      <button
-                        key={extraKey(e)}
-                        className={`chip ${e.active ? "on" : ""}`}
-                        onClick={() => setFlag(w, { extras: { ...flags[weaponKey(w)]?.extras, [extraKey(e)]: !e.active } })}
-                        title="Sumar este daño extra a Daño y Crítico"
-                      >
-                        +{e.dice}d{e.sides} {e.type}
-                      </button>
-                    ))}
-                  </div>
-                  <div className="weapon-btns">
-                    {steps.map((b, m) => (
-                      <button key={m} className={`btn ${atk.value < w.attack ? "down" : ""}`} title={atk.notes || undefined} onClick={() => rollWeapon(w, "attack", m)}>
-                        {fmtMod(b)}
-                      </button>
-                    ))}
-                    <button className="btn" onClick={() => rollWeapon(w, "damage")}>
-                      Daño
-                    </button>
-                    <button className="btn crit" onClick={() => rollWeapon(w, "crit")}>
-                      Crítico
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-            {c.impulse && (
-              <div className="weapon">
-                <div className="weapon-head">
-                  <b>Impulsos</b>
-                  <span className="muted small">Kineticista (Constitución)</span>
-                </div>
-                <div className="weapon-btns">
-                  {(() => {
-                    const atk = adjust(c.impulse.attack, { kind: "impulse-attack" });
-                    const dc = adjust(c.impulse.dc, { kind: "impulse-dc" });
-                    return (
-                      <>
-                        <button className="btn" onClick={() => rollCheck("Ataque de impulso", c.impulse!.attack, { kind: "impulse-attack" })}>
-                          Ataque <Val base={c.impulse.attack} value={atk.value} notes={atk.notes} />
-                        </button>
-                        <span className="dc" title={dc.notes || undefined}>
-                          CD {dc.value}
-                        </span>
-                      </>
-                    );
-                  })()}
-                </div>
-              </div>
-            )}
-          </>
+          <AttacksTab
+            character={c}
+            state={state}
+            canEdit={canEdit}
+            extras={props.extras}
+            canEditExtras={props.canEditExtras}
+            updateExtras={props.updateExtras}
+            onPatch={onPatch}
+          />
         )}
 
         {tab === "skills" && (
           <>
+            {(f.huntPrey || f.edge === "outwit") && (
+              <div className="strike-opts">
+                {f.huntPrey && (
+                  <button className={`chip ${huntBonus ? "on" : ""}`} title="+2 circunstancial a Percepción y Supervivencia contra tu presa" onClick={() => setHuntBonus((v) => !v)}>
+                    Cazar presa +2
+                  </button>
+                )}
+                {f.edge === "outwit" && (
+                  <button className={`chip ${outwitBonus ? "on" : ""}`} title="+2 circunstancial a Engaño, Sigilo y Recordar conocimiento contra tu presa" onClick={() => setOutwitBonus((v) => !v)}>
+                    Burlar +2
+                  </button>
+                )}
+              </div>
+            )}
             <button className="stat-row wide" onClick={() => rollCheck("Percepción", c.perception.mod, { kind: "perception" })}>
               <Rank prof={c.perception.prof} />
               <span>Percepción (iniciativa)</span>
@@ -299,7 +160,14 @@ export function SheetTabs({ character: c, state, canEdit, onRoll, onPatch, log, 
                 );
               })}
             </div>
-            {state && <ShieldCard state={state} canEdit={canEdit} onPatch={onPatch} />}
+            {state && (
+              <ShieldCard
+                shield={state.shield}
+                canEdit={canEdit}
+                onSet={(fn) => onPatch((x) => ({ ...x, shield: fn(x.shield) }))}
+                onBlock={(dmg) => dealDamage({ kind: "pc", id: state.id }, dmg, { block: true })}
+              />
+            )}
             <div className="abilities">
               {Object.entries(c.abilities).map(([k, v]) => (
                 <div key={k} className="ability">
@@ -318,14 +186,20 @@ export function SheetTabs({ character: c, state, canEdit, onRoll, onPatch, log, 
               <div>
                 CD de clase <b>{adjust(c.classDc, { kind: "class-dc" }).value}</b>
               </div>
-              <div title={speedTitle(c)}>
-                Velocidad <b className="speed">{c.speed} ft</b>
+              <div title={[speedTitle(c), speed.notes].filter(Boolean).join("\n")}>
+                Velocidad <b className={`speed ${speed.value > c.speed ? "up" : ""}`}>{speed.value} ft</b>
               </div>
             </div>
             <div className="senses-box">
               <small>Sentidos</small>
               <span>{c.senses?.length ? c.senses.join(" · ") : "Visión normal"}</span>
             </div>
+            {state && (
+              <div className="senses-box">
+                <small>Inmunidades, resistencias y debilidades</small>
+                <IwrEditor iwr={state.iwr} canEdit={canEdit} onChange={(iwr) => onPatch((x) => ({ ...x, iwr }))} />
+              </div>
+            )}
             {c.parserVersion === undefined && (
               <p className="muted small">Vuelve a importar el JSON de Pathbuilder para ver sentidos, escudo y detalle de velocidad.</p>
             )}

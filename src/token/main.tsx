@@ -80,29 +80,33 @@ function TokenEditor() {
   if (d.kind === "pc") {
     const s = d.characterId ? states[d.characterId] : undefined;
     if (!s) return <div className="te te-empty">{ready ? "Este PJ no tiene hoja activa en la sala." : "Cargando…"}</div>;
-    const maxHp = effectiveMaxHp(s.maxHp, s.level, s.cond);
+    // El eidolón usa los PG de su invocador
+    const h = states[live.hpHolder(s.id)] ?? s;
+    const maxHp = effectiveMaxHp(h.maxHp, h.level, h.cond);
     const eff = effectiveAc(s.baseAc, s.acAdj, s.cond, s.shield).ac;
+    const patchHp = (fn: Parameters<typeof live.patch>[1]) => live.patch(h.id, fn);
     const patch = (fn: Parameters<typeof live.patch>[1]) => live.patch(s.id, fn);
     m = {
-      hp: s.hp,
+      hp: h.hp,
       maxHp,
-      temp: s.temp,
+      temp: h.temp,
       ac: eff,
       cond: s.cond,
-      damage: (n) => patch((x) => applyDamage(x, n)),
-      heal: (n) => patch((x) => applyHealing(x, n, effectiveMaxHp(x.maxHp, x.level, x.cond))),
-      setHp: (n) => patch((x) => setHp(x, n, effectiveMaxHp(x.maxHp, x.level, x.cond))),
-      setTemp: (n) => patch((x) => ({ ...x, temp: n })),
+      damage: (n) => patchHp((x) => applyDamage(x, n)),
+      heal: (n) => patchHp((x) => applyHealing(x, n, effectiveMaxHp(x.maxHp, x.level, x.cond))),
+      setHp: (n) => patchHp((x) => setHp(x, n, effectiveMaxHp(x.maxHp, x.level, x.cond))),
+      setTemp: (n) => patchHp((x) => ({ ...x, temp: n })),
       // La CA que se escribe es la final: se guarda como ajuste sobre lo que dan hoja y condiciones
       setAc: (n) => patch((x) => ({ ...x, acAdj: x.acAdj + (n - effectiveAc(x.baseAc, x.acAdj, x.cond, x.shield).ac) })),
     };
   } else {
     const n = npcState(d);
-    const eff = effectiveAc(n.baseAc, n.acAdj, n.cond).ac;
+    const eff = effectiveAc(n.baseAc, n.acAdj, n.cond, n.shield).ac;
+    const nMax = effectiveMaxHp(n.maxHp, n.level, n.cond);
     const patch = (fn: Parameters<typeof patchNpc>[1]) => patchNpc(item.id, fn);
     m = {
       hp: n.hp,
-      maxHp: n.maxHp,
+      maxHp: nMax,
       temp: n.temp,
       ac: eff,
       cond: n.cond,
@@ -111,10 +115,10 @@ function TokenEditor() {
           const hit = applyDamage({ hp: x.hp, temp: x.temp, dying: 0, wounded: 0 }, v);
           return { ...x, hp: hit.hp, temp: hit.temp };
         }),
-      heal: (v) => patch((x) => ({ ...x, hp: Math.min(x.maxHp, x.hp + v) })),
-      setHp: (v) => patch((x) => ({ ...x, hp: Math.max(0, Math.min(x.maxHp, v)) })),
+      heal: (v) => patch((x) => ({ ...x, hp: Math.min(effectiveMaxHp(x.maxHp, x.level, x.cond), x.hp + v) })),
+      setHp: (v) => patch((x) => ({ ...x, hp: Math.max(0, Math.min(effectiveMaxHp(x.maxHp, x.level, x.cond), v)) })),
       setTemp: (v) => patch((x) => ({ ...x, temp: v })),
-      setAc: (v) => patch((x) => ({ ...x, acAdj: x.acAdj + (v - effectiveAc(x.baseAc, x.acAdj, x.cond).ac) })),
+      setAc: (v) => patch((x) => ({ ...x, acAdj: x.acAdj + (v - effectiveAc(x.baseAc, x.acAdj, x.cond, x.shield).ac) })),
       maxField: (v) => patch((x) => ({ ...x, maxHp: Math.max(1, v), hp: Math.min(x.hp, Math.max(1, v)) })),
     };
   }

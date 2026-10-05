@@ -6,7 +6,8 @@ import { autoLinkCandidate, inOwlbear, linkToken, publishPlayer, unlinkToken } f
 import { store } from "../storage";
 import { live, needsSheetSync, seedState, syncSheet, useLiveStates, type PcState } from "../live";
 import { DEGREE_LABEL, applyRecovery, degreeOf, type Degree } from "../rules";
-import { newId, npcState, type NpcState, type RollEntry } from "../shared";
+import { CHANNEL_FX, newId, npcState, type NpcState, type RollEntry } from "../shared";
+import { ActionsContext, type Actions, type NoteRequest, type RollResult } from "./ctx";
 import { combatEntries, pcKey, useCombat } from "../combat";
 import { applyPersistent } from "../turns";
 import { playerMeta, useLinkedToken, useParty, useRollLog, useSceneTokens, useSession } from "./hooks";
@@ -30,6 +31,8 @@ import { InventoryPanel } from "./side/InventoryPanel";
 import { MagicPanel } from "./side/MagicPanel";
 import { RecipesPanel } from "./side/RecipesPanel";
 import { PetPanel } from "./side/PetPanel";
+import { ClassBar } from "./ClassBar";
+import { PendingSaves } from "./SavesPanel";
 import type { SideProps } from "./side/types";
 
 const dice = new Dice3D();
@@ -51,6 +54,11 @@ export interface RollRequest {
   charId?: string;
   // Efecto visual en el mapa (ataques)
   fx?: RollFx;
+  // Comparar con una CD o CA: da el grado de éxito (la CD no se muestra si no se pide)
+  vs?: { dc: number; name?: string; showDc?: boolean };
+  // Fuerza tirada secreta (PNJ ocultos, tiradas del GM)
+  secret?: boolean;
+  tag?: string;
 }
 
 interface Current {
@@ -316,7 +324,7 @@ export function App() {
   );
 
   const roll = useCallback(
-    async (req: RollRequest, opts: { preview?: boolean; quick?: boolean } = {}): Promise<number | undefined> => {
+    async (req: RollRequest, opts: { preview?: boolean; quick?: boolean } = {}): Promise<RollResult | undefined> => {
       if (busy.current) return;
       let formula = req.formula;
       if (req.kind === "check" && extra) formula += fmtMod(extra);
@@ -329,7 +337,7 @@ export function App() {
       }
       busy.current = true;
       // Un jugador no ve su tirada secreta: ni animación ni resultado
-      const isSecret = secret && !opts.preview;
+      const isSecret = (secret || !!req.secret) && !opts.preview;
       // Sin la hoja en pantalla no hay dónde animar los dados: se tira sin animación
       const hideFromMe = (isSecret && !isGm) || !!opts.quick;
       const key = ++rollKey.current;
@@ -341,10 +349,13 @@ export function App() {
         const out = evaluate(f, values, { crit: req.crit, check: req.kind !== "damage" });
         const shownFormula = req.crit ? `2×(${formula})` : formula;
         let degree: Degree | undefined;
+        const d20 = f.dice[0]?.sides === 20 && f.dice[0].count === 1 ? values[0]?.[0] : undefined;
         if (req.flat) {
-          const d20 = values[0]?.[0];
           degree = req.flat.recovery ? degreeOf(out.total, req.flat.dc, d20) : out.total >= req.flat.dc ? "success" : "failure";
+        } else if (req.vs) {
+          degree = degreeOf(out.total, req.vs.dc, d20);
         }
+        const shownDc = req.flat?.dc ?? (req.vs?.showDc ? req.vs.dc : undefined);
         if (!hideFromMe) {
           showOverlay({
             phase: "result",
@@ -355,8 +366,8 @@ export function App() {
             detail: out.detail,
             nat: out.nat,
             degree,
-            dc: req.flat?.dc,
-            notes: req.notes,
+            dc: shownDc,
+            notes: [req.vs?.name ? `vs ${req.vs.name}` : "", req.notes ?? ""].filter(Boolean).join(" · ") || undefined,
           });
         }
         setCurrent(
@@ -374,7 +385,7 @@ export function App() {
                 rolling: false,
               },
         );
-        if (opts.preview) return out.total;
+        if (opts.preview) return { total: out.total, degree, nat: out.nat };
         const entry: RollEntry = {
           id: newId(),
           time: Date.now(),
@@ -392,18 +403,52 @@ export function App() {
           secret: isSecret || undefined,
           diceColor: diceStyle.color,
           notes: req.notes,
-          dc: req.flat?.dc,
+          dc: shownDc,
           degree,
+          targetName: req.vs?.name,
+          tag: req.tag,
         };
         await publish(entry);
         // La tirada de recuperación cambia moribundo según el resultado
         if (req.flat?.recovery && degree && rollingFor) await live.patch(rollingFor, (s) => applyRecovery(s, degree!));
-        return out.total;
+        return { total: out.total, degree, nat: out.nat };
       } finally {
         busy.current = false;
       }
     },
     [extra, secret, isGm, who, character, publish, showOverlay, diceStyle.color],
+  );
+
+  const notify = useCallback(
+    async (n: NoteRequest) => {
+      await publish({
+        id: newId(),
+        time: Date.now(),
+        ...who,
+        charName: n.charName ?? character?.name,
+        charId: n.charId ?? character?.id,
+        label: n.label,
+        formula: "",
+        detail: n.detail ?? "",
+        total: NaN,
+        kind: "note",
+        secret: n.secret || undefined,
+        diceColor: diceStyle.color,
+        tag: n.tag,
+        targetName: n.targetName,
+        fx: n.fx,
+      });
+    },
+    [publish, who, character, diceStyle.color],
+  );
+
+  const playFx = useCallback((fx: RollFx) => {
+    if (inOwlbear) OBR.broadcast.sendMessage(CHANNEL_FX, fx, { destination: "ALL" }).catch(() => undefined);
+  }, []);
+
+  const ctxActions: Actions = useMemo(
+    () => ({ roll, notify, publish, playFx, isGm, meId: session.me.id }),
+    [roll, notify, publish, playFx, isGm, session.me.id],
   );
 
   const freeRoll = (formula: string) => roll({ label: "Tirada libre", formula, kind: "free" });
@@ -431,11 +476,12 @@ export function App() {
   const rollInit = useCallback(
     async (c: Character, opt: InitOption, winsTies: boolean) => {
       const f = initFormula(opt, live.get(c.id));
-      const total = await roll(
+      const r = await roll(
         { label: `Iniciativa (${opt.label})`, formula: f.formula, kind: "check", notes: f.notes, charName: c.name },
         { quick: view !== "sheet" },
       );
-      if (total === undefined) return;
+      if (r === undefined) return;
+      const total = r.total;
       await live.patch(c.id, (s) => ({ ...s, init: { value: total, skill: opt.key, label: opt.label, winsTies, t: Date.now() } }));
     },
     [roll, view],
@@ -446,6 +492,7 @@ export function App() {
   const viewingOther = !!viewId && !!sheets[viewId] && viewId !== own?.id;
 
   return (
+    <ActionsContext.Provider value={ctxActions}>
     <div className="app">
       <nav className="topnav">
         <button
@@ -563,7 +610,7 @@ export function App() {
               <div className="side-scroll">
                 {side === "feats" && <FeatsPanel {...sp} />}
                 {side === "inventory" && <InventoryPanel {...sp} />}
-                {side === "magic" && <MagicPanel {...sp} onRoll={roll} />}
+                {side === "magic" && <MagicPanel {...sp} />}
                 {side === "recipes" && <RecipesPanel {...sp} />}
                 {side === "pet" && <PetPanel {...sp} onRoll={roll} />}
               </div>
@@ -678,10 +725,25 @@ export function App() {
             </section>
 
             {character && (
+              <ClassBar
+                character={character}
+                state={state}
+                extras={extras}
+                canEdit={canEdit}
+                canEditExtras={ownsCharacter}
+                updateExtras={(fn) => extrasStore.update(character.id, fn)}
+                onPatch={onPatch}
+              />
+            )}
+            {character && <PendingSaves charId={character.id} states={states} sheets={sheets} />}
+            {character && (
               <SheetTabs
                 character={character}
                 state={state}
                 canEdit={canEdit}
+                extras={extras}
+                canEditExtras={ownsCharacter}
+                updateExtras={(fn) => extrasStore.update(character.id, fn)}
                 onRoll={roll}
                 onPatch={onPatch}
                 log={log}
@@ -720,5 +782,6 @@ export function App() {
         </div>
       </div>
     </div>
+    </ActionsContext.Provider>
   );
 }

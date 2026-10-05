@@ -1,4 +1,5 @@
 import type { Character } from "../../pathbuilder";
+import { featuresOf } from "../../classes";
 import { IconBag, IconBook, IconFeats, IconFlask, IconSheet, IconWolf } from "./icons";
 
 export type Side = "feats" | "inventory" | "magic" | "recipes" | "pet";
@@ -6,14 +7,15 @@ export type Side = "feats" | "inventory" | "magic" | "recipes" | "pet";
 // Pestañas que se asoman por el lado derecho de la hoja, en el orden pedido
 export function sidesFor(c: Character): { id: Side; label: string; icon: React.ReactNode }[] {
   const alch = c.alchemy;
+  const f = featuresOf(c);
   return [
     { id: "feats" as const, label: "Dotes y rasgos", icon: <IconFeats /> },
     { id: "inventory" as const, label: "Inventario", icon: <IconBag /> },
-    ...(c.casters.length ? [{ id: "magic" as const, label: "Magia", icon: <IconBook /> }] : []),
+    ...(c.casters.length || f.kinetic || f.runes ? [{ id: "magic" as const, label: "Magia", icon: <IconBook /> }] : []),
     ...(c.formulas?.length || alch?.alchemist || alch?.advanced || alch?.quick
       ? [{ id: "recipes" as const, label: "Recetas", icon: <IconFlask /> }]
       : []),
-    ...(c.pets?.length ? [{ id: "pet" as const, label: "Mascota", icon: <IconWolf /> }] : []),
+    ...(c.pets?.length || f.thrall ? [{ id: "pet" as const, label: "Mascota", icon: <IconWolf /> }] : []),
   ];
 }
 

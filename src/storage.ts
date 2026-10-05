@@ -1,6 +1,7 @@
 import { PARSER_VERSION, parsePathbuilder, type Character, type Weapon } from "./pathbuilder";
 import { DEFAULT_DICE_STYLE, type DiceStyle } from "./dice";
 import type { AttackFx } from "./fx";
+import type { SlingerKind } from "./classes";
 import { TOAST_KEY, type RollEntry, type ToastItem, type VitalState } from "./shared";
 
 // Todas las páginas de la extensión comparten origen, así que comparten localStorage.
@@ -32,6 +33,11 @@ export interface WeaponFlags {
   extras?: Record<string, boolean>;
   // Efecto visual del ataque ("none" = sin efecto)
   fx?: AttackFx | "none";
+  // Pistolero: ballesta o pistola de un tiro
+  sling?: SlingerKind;
+  // Daño y tipo escritos a mano (bomba del alquimista)
+  dmg?: string;
+  dmgType?: string;
 }
 
 export const extraKey = (e: { dice: number; sides: number; type: string }) => `${e.dice}d${e.sides} ${e.type}`;
@@ -45,6 +51,8 @@ export function applyWeaponFlags(w: Weapon, f: WeaponFlags | undefined): Weapon 
     finesse: f.finesse ?? base.finesse,
     ranged: f.ranged ?? base.ranged,
     range: f.range ?? base.range,
+    dmgFormula: f.dmg ?? base.dmgFormula,
+    damageType: f.dmgType ?? base.damageType,
     extra: base.extra.map((e) => ({ ...e, active: f.extras?.[extraKey(e)] ?? e.active })),
   };
 }

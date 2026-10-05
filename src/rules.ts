@@ -44,8 +44,26 @@ export interface PersistentDamage {
   type: string;
 }
 
+// Bono o penalizador temporal que otro aplica (Himno valeroso, Provocar…). Se apaga solo
+// al empezar o terminar el turno de quien lo dio ("pc:<id>" o "npc:<id>").
+export interface Buff {
+  id: string;
+  n: string;
+  ty: BonusType;
+  icon?: string;
+  atk?: number;
+  dmg?: number;
+  ac?: number;
+  // Salvaciones contra efectos de miedo
+  fear?: number;
+  // Tiradas de ataque y CD contra quien no sea "except" (Provocar del guardián)
+  vsOthers?: { v: number; except: string };
+  until?: { key: string; at: "start" | "end" };
+}
+
 export interface Conditions {
   offGuard?: boolean;
+  fatigued?: boolean;
   frightened?: number;
   sickened?: number;
   enfeebled?: number;
@@ -56,12 +74,13 @@ export interface Conditions {
   cover?: 1 | 2 | 4;
   fastHealing?: number;
   persistent?: PersistentDamage[];
+  buffs?: Buff[];
 }
 
 export type ValuedCondition = "frightened" | "sickened" | "enfeebled" | "clumsy" | "stupefied" | "drained" | "fastHealing";
 
 export interface ConditionDef {
-  id: "offGuard" | ValuedCondition;
+  id: "offGuard" | "fatigued" | ValuedCondition;
   label: string;
   icon: string;
   valued: boolean;
@@ -70,6 +89,7 @@ export interface ConditionDef {
 
 export const CONDITIONS: ConditionDef[] = [
   { id: "offGuard", label: "Desprevenido", icon: "off-guard", valued: false, desc: "−2 circunstancial a la CA." },
+  { id: "fatigued", label: "Fatigado", icon: "fatigued", valued: false, desc: "−1 de estado a la CA y a las salvaciones. No puede entrar en Furia." },
   {
     id: "frightened",
     label: "Asustado",
@@ -126,6 +146,7 @@ export function activeConditionIcons(c: Conditions | undefined): { icon: string;
   const cover = COVERS.find((x) => x.value === c.cover);
   if (cover) out.push({ icon: cover.icon, label: cover.label });
   for (const p of c.persistent ?? []) out.push({ icon: "persistent", label: `Persistente ${p.formula} ${p.type}`.trim() });
+  for (const b of c.buffs ?? []) if (b.icon) out.push({ icon: b.icon, label: b.n });
   return out;
 }
 
@@ -134,11 +155,12 @@ export function activeConditionIcons(c: Conditions | undefined): { icon: string;
 export type RollCtx =
   | { kind: "skill"; key: string; ability: Ability }
   | { kind: "perception" }
-  | { kind: "save"; key: "fortitude" | "reflex" | "will" }
-  | { kind: "attack"; melee: boolean; finesse: boolean }
-  | { kind: "damage"; melee: boolean }
-  | { kind: "spell-attack" }
-  | { kind: "spell-dc" }
+  | { kind: "save"; key: "fortitude" | "reflex" | "will"; fear?: boolean }
+  // target: clave de quien recibe el ataque ("pc:<id>" o "npc:<tokenId>"), para Provocar
+  | { kind: "attack"; melee: boolean; finesse: boolean; target?: string }
+  | { kind: "damage"; melee: boolean; spell?: boolean }
+  | { kind: "spell-attack"; target?: string }
+  | { kind: "spell-dc"; target?: string }
   | { kind: "impulse-attack" }
   | { kind: "impulse-dc" }
   | { kind: "class-dc" }
@@ -172,9 +194,21 @@ export function conditionMods(c: Conditions | undefined, ctx: RollCtx, shield?: 
     status("Asustado", cond.frightened);
     status("Enfermo", cond.sickened);
   }
+  // Bonos temporales de otros (Himno valeroso, Provocar…)
+  for (const b of cond.buffs ?? []) {
+    const isAttack = ctx.kind === "attack" || ctx.kind === "spell-attack" || ctx.kind === "impulse-attack";
+    if (isAttack && b.atk) mods.push({ label: b.n, type: b.ty, value: b.atk });
+    if (isDamage && b.dmg) mods.push({ label: b.n, type: b.ty, value: b.dmg });
+    if (ctx.kind === "ac" && b.ac) mods.push({ label: b.n, type: b.ty, value: b.ac });
+    if (ctx.kind === "save" && ctx.fear && b.fear) mods.push({ label: `${b.n} (miedo)`, type: b.ty, value: b.fear });
+    if (b.vsOthers && (ctx.kind === "attack" || ctx.kind === "spell-attack" || ctx.kind === "spell-dc") && "target" in ctx && ctx.target && ctx.target !== b.vsOthers.except) {
+      mods.push({ label: b.n, type: b.ty, value: b.vsOthers.v });
+    }
+  }
   switch (ctx.kind) {
     case "ac":
       if (cond.offGuard) mods.push({ label: "Desprevenido", type: "circumstance", value: -2 });
+      if (cond.fatigued) mods.push({ label: "Fatigado", type: "status", value: -1 });
       status("Torpe", cond.clumsy);
       if (cond.cover) mods.push({ label: COVERS.find((x) => x.value === cond.cover)!.label, type: "circumstance", value: cond.cover });
       if (shield?.raised && !shieldBroken(shield) && shield.bonus > 0) {
@@ -182,6 +216,7 @@ export function conditionMods(c: Conditions | undefined, ctx: RollCtx, shield?: 
       }
       break;
     case "save":
+      if (cond.fatigued) mods.push({ label: "Fatigado", type: "status", value: -1 });
       if (ctx.key === "reflex") {
         status("Torpe", cond.clumsy);
         if (cond.cover && cond.cover >= 2) mods.push({ label: "Cobertura", type: "circumstance", value: cond.cover });
@@ -201,7 +236,8 @@ export function conditionMods(c: Conditions | undefined, ctx: RollCtx, shield?: 
       if (MENTAL.includes(ctx.ability)) status("Estupefacto", cond.stupefied);
       break;
     case "attack":
-      if (ctx.melee) status("Débil", cond.enfeebled);
+      // Armas de Fuerza (cuerpo a cuerpo) → Débil; de Destreza (sutiles o a distancia) → Torpe
+      if (ctx.melee && !ctx.finesse) status("Débil", cond.enfeebled);
       if (!ctx.melee || ctx.finesse) status("Torpe", cond.clumsy);
       break;
     case "damage":
@@ -244,8 +280,9 @@ export interface Vitals {
 
 export const DEATH_DYING = 4;
 
+// Drenado: −(nivel, mínimo 1) × valor a los PG máximos
 export function effectiveMaxHp(maxHp: number, level: number, cond?: Conditions) {
-  return Math.max(1, maxHp - level * (cond?.drained ?? 0));
+  return Math.max(1, maxHp - Math.max(1, level) * (cond?.drained ?? 0));
 }
 
 // Daño: primero los PG temporales. Al caer a 0 se gana moribundo 1 + herido;
@@ -321,3 +358,115 @@ export function shieldBlock(shield: ShieldState, damage: number) {
 export function shieldRepair(shield: ShieldState, amount: number): ShieldState {
   return { ...shield, hp: Math.min(shield.maxHp, shield.hp + Math.max(0, amount)) };
 }
+
+// ---------- CD por nivel ----------
+
+// CD estándar según el nivel de la criatura o del PJ (nivel 0 a 25)
+export const LEVEL_DC = [14, 15, 16, 18, 19, 20, 22, 23, 24, 26, 27, 28, 30, 31, 32, 34, 35, 36, 38, 39, 40, 42, 44, 46, 48, 50];
+
+export const levelDc = (level: number) => LEVEL_DC[Math.max(0, Math.min(LEVEL_DC.length - 1, Math.round(level)))];
+
+// ---------- Inmunidades, resistencias y debilidades ----------
+
+export interface IwrEntry {
+  t: string;
+  v: number;
+}
+
+export interface Iwr {
+  imm?: string[];
+  res?: IwrEntry[];
+  weak?: IwrEntry[];
+}
+
+export const DAMAGE_TYPES = [
+  "cortante", "perforante", "contundente", "fuego", "frío", "ácido", "electricidad", "sonido",
+  "veneno", "mental", "espíritu", "vitalidad", "vacío", "fuerza", "sangrado", "precisión",
+];
+
+// Grupos que se pueden escribir como tipo de una resistencia o inmunidad
+export const IWR_GROUPS: Record<string, string[]> = {
+  fisico: ["cortante", "perforante", "contundente"],
+  energia: ["fuego", "frio", "acido", "electricidad", "sonido", "vitalidad", "vacio", "fuerza"],
+};
+
+const norm = (s: string) => s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim();
+
+// Nombres en inglés de Pathbuilder y abreviaturas de armas
+const ALIAS: Record<string, string> = {
+  s: "cortante", p: "perforante", b: "contundente", slashing: "cortante", piercing: "perforante", bludgeoning: "contundente",
+  fire: "fuego", cold: "frio", acid: "acido", electricity: "electricidad", sonic: "sonido", poison: "veneno",
+  spirit: "espiritu", vitality: "vitalidad", void: "vacio", force: "fuerza", bleed: "sangrado", precision: "precision",
+  physical: "fisico", all: "todo",
+};
+
+export const normType = (t: string) => {
+  const n = norm(t);
+  return ALIAS[n] ?? n;
+};
+
+// ¿La entrada de resistencia/inmunidad/debilidad cubre este tipo de daño?
+export function iwrMatches(entryType: string, damageType: string): boolean {
+  const e = normType(entryType);
+  const d = normType(damageType);
+  if (!e) return false;
+  if (e === "todo" || e === "todos") return true;
+  if (!d) return false;
+  if (e === d) return true;
+  return (IWR_GROUPS[e] ?? []).includes(d);
+}
+
+export interface IwrPick {
+  imm: boolean;
+  res: number[];
+  weak: number[];
+}
+
+// Lo que se aplica por defecto según el tipo de daño (el GM o el jugador puede cambiarlo)
+export function autoIwr(iwr: Iwr | undefined, type: string): IwrPick {
+  return {
+    imm: (iwr?.imm ?? []).some((t) => iwrMatches(t, type)),
+    res: (iwr?.res ?? []).flatMap((r, i) => (iwrMatches(r.t, type) ? [i] : [])),
+    weak: (iwr?.weak ?? []).flatMap((w, i) => (iwrMatches(w.t, type) ? [i] : [])),
+  };
+}
+
+export const hasIwr = (iwr?: Iwr) => !!(iwr?.imm?.length || iwr?.res?.length || iwr?.weak?.length);
+
+// Inmunidad → 0. Si no, se suma la debilidad (sobre el total, ya duplicado si fue crítico)
+// y se resta la resistencia. De varias aplicables solo cuenta la mayor.
+export function resolveIwr(amount: number, iwr: Iwr | undefined, pick: IwrPick): { total: number; notes: string } {
+  if (amount <= 0) return { total: 0, notes: "" };
+  if (pick.imm) return { total: 0, notes: "Inmune" };
+  const weak = Math.max(0, ...pick.weak.map((i) => iwr?.weak?.[i]?.v ?? 0));
+  const res = Math.max(0, ...pick.res.map((i) => iwr?.res?.[i]?.v ?? 0));
+  const notes = [weak ? `Debilidad +${weak}` : "", res ? `Resistencia −${res}` : ""].filter(Boolean).join(", ");
+  return { total: Math.max(0, amount + weak - res), notes };
+}
+
+export function iwrText(iwr?: Iwr): string {
+  if (!iwr) return "";
+  return [
+    ...(iwr.imm ?? []).map((t) => `Inmune ${t}`),
+    ...(iwr.res ?? []).map((r) => `Resist. ${r.t} ${r.v}`),
+    ...(iwr.weak ?? []).map((w) => `Debil. ${w.t} ${w.v}`),
+  ].join(" · ");
+}
+
+// Grado de un ataque contra una CA (con 20/1 natural)
+export const attackDegree = (total: number, ac: number, natural?: number) => degreeOf(total, ac, natural);
+
+// Quita los bonos temporales que vencen al empezar o terminar el turno de alguien
+export function expireBuffs(c: Conditions, keys: string[], at: "start" | "end"): Conditions | null {
+  const list = c.buffs ?? [];
+  const keep = list.filter((b) => !(b.until && b.until.at === at && keys.includes(b.until.key)));
+  if (keep.length === list.length) return null;
+  return { ...c, buffs: keep.length ? keep : undefined };
+}
+
+// Agrega (o reemplaza por id) un bono temporal
+export const withBuff = (c: Conditions, b: Buff): Conditions => ({ ...c, buffs: [...(c.buffs ?? []).filter((x) => x.id !== b.id), b] });
+export const withoutBuff = (c: Conditions, id: string): Conditions => {
+  const keep = (c.buffs ?? []).filter((x) => x.id !== id);
+  return { ...c, buffs: keep.length ? keep : undefined };
+};

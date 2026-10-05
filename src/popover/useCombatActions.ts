@@ -3,11 +3,12 @@ import OBR from "@owlbear-rodeo/sdk";
 import { fmtMod } from "../pathbuilder";
 import { live } from "../live";
 import { inOwlbear, tokenData } from "../obr";
-import { newId } from "../shared";
+import { CHANNEL_FX, newId } from "../shared";
 import { store } from "../storage";
 import { autoRoll, type Roller } from "../autoRoll";
 import { EMPTY_COMBAT, combatStore, moveTarget, stepTurn, type Combat, type Entry, type NpcCombatant } from "../combat";
 import { endOfTurn, startOfTurn, type Publish } from "../turns";
+import type { RollFx } from "../fx";
 
 export type CombatActions = ReturnType<typeof useCombatActions>;
 
@@ -60,10 +61,36 @@ export function useCombatActions(combat: Combat, entries: Entry[], who: Roller, 
     };
 
     return {
-      start: () => combatStore.patch((c) => ({ ...c, active: true, round: 0, current: null })),
+      async start() {
+        await combatStore.patch((c) => ({ ...c, active: true, round: 0, current: null }));
+        // Furia al iniciar el combate (casilla del bárbaro)
+        const { who, publish } = ref.current;
+        for (const s of Object.values(live.all())) {
+          const temp = s.cls?.autoRage;
+          if (!temp || s.cls?.rage || s.cond.fatigued) continue;
+          await live.patch(s.id, (x) => ({ ...x, temp: Math.max(x.temp, temp), cls: { ...x.cls, rage: true } }));
+          await publish({ id: newId(), time: Date.now(), ...who, charName: s.name, label: `${s.name} entra en Furia`, formula: "", detail: `+${temp} PG temporales`, total: NaN, kind: "note", tag: "Furia" });
+          const fx: RollFx = { kind: "rage", from: `pc:${s.id}` };
+          if (inOwlbear) OBR.broadcast.sendMessage(CHANNEL_FX, fx, { destination: "ALL" }).catch(() => undefined);
+        }
+      },
 
       async end() {
-        for (const s of Object.values(live.all())) if (s.init) await live.patch(s.id, (x) => ({ ...x, init: undefined }));
+        // Lo que dura "hasta el fin del combate" o por rondas se apaga
+        for (const s of Object.values(live.all())) {
+          const buffs = (s.cond.buffs ?? []).filter((b) => !b.until);
+          const k = s.cls ?? {};
+          const clsChanged = k.rage || k.psyche || k.boost || k.taunt || k.strat || k.traced || k.odCd || k.castR !== undefined || k.stupR;
+          if (!s.init && !clsChanged && buffs.length === (s.cond.buffs ?? []).length) continue;
+          await live.patch(s.id, (x) => ({
+            ...x,
+            init: undefined,
+            cond: { ...x.cond, buffs: (x.cond.buffs ?? []).filter((b) => !b.until).length ? (x.cond.buffs ?? []).filter((b) => !b.until) : undefined },
+            cls: x.cls
+              ? { ...x.cls, rage: undefined, psyche: undefined, boost: undefined, taunt: undefined, strat: undefined, traced: undefined, odCd: undefined, castR: undefined, stupR: undefined }
+              : undefined,
+          }));
+        }
         await combatStore.write({ ...EMPTY_COMBAT, excluded: ref.current.combat.excluded });
       },
 
@@ -74,7 +101,7 @@ export function useCombatActions(combat: Combat, entries: Entry[], who: Roller, 
         try {
           const { combat, entries, who, publish } = ref.current;
           const s = stepTurn(entries, combat, dir);
-          if (dir === 1 && s.from) await endOfTurn(s.from, who, publish);
+          if (dir === 1 && s.from) await endOfTurn(s.from, who, publish, combat.round);
           await combatStore.patch((c) => ({ ...c, active: true, current: s.current, round: s.round }));
           if (dir === 1 && s.to) await startOfTurn(s.to, who, publish);
         } finally {

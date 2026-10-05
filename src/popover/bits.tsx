@@ -1,4 +1,5 @@
 // Piezas pequeñas de interfaz que se repiten en la hoja y en el panel del GM
+import { useState } from "react";
 import { activeConditionIcons, type Conditions } from "../rules";
 
 export const iconUrl = (name: string) => `icons/cond/${name}.svg`;
@@ -49,5 +50,31 @@ export function Pips(props: {
         />
       ))}
     </span>
+  );
+}
+
+// Campo numérico que guarda al salir o con Enter
+export function NumInput({ label, value, onCommit, title }: { label: string; value: number; onCommit: (n: number) => void; title?: string }) {
+  const [text, setText] = useState(String(value));
+  const [prev, setPrev] = useState(value);
+  if (prev !== value) {
+    setPrev(value);
+    setText(String(value));
+  }
+  return (
+    <label className="te-field" title={title}>
+      <span>{label}</span>
+      <input
+        inputMode="numeric"
+        value={text}
+        onChange={(e) => setText(e.target.value.replace(/[^\d-]/g, ""))}
+        onBlur={() => {
+          const n = parseInt(text, 10);
+          if (Number.isFinite(n)) onCommit(n);
+          else setText(String(value));
+        }}
+        onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+      />
+    </label>
   );
 }

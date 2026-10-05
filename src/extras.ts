@@ -3,6 +3,10 @@
 // dueño de la hoja y se publica junto a la hoja (metadata del jugador) para que el GM lo vea.
 // Los recursos que el GM también edita (foco, espacios, alquimia) van en el estado de la sala.
 import { useEffect, useState } from "react";
+import type { BonusType } from "./rules";
+import type { SaveKey, SpellKind } from "./shared";
+import type { MagicDesign } from "./fx";
+import type { HunterEdge } from "./classes";
 
 export interface PetAttack {
   name: string;
@@ -11,10 +15,78 @@ export interface PetAttack {
   agile?: boolean;
 }
 
+export interface FamiliarAbility {
+  n: string;
+  note?: string;
+}
+
 export interface PetStats {
   // Modificadores por clave: perception, fortitude, reflex, will, acrobatics, athletics, stealth…
   mods?: Record<string, number>;
   attacks?: PetAttack[];
+  notes?: string;
+  // Beneficio de apoyo (compañero animal) o habilidad especial (eidolón, constructo)
+  support?: string;
+  special?: string;
+  // Familiar: habilidades del día (ranuras editables) y Resistente (+2 PG por nivel)
+  abilities?: FamiliarAbility[];
+  tough?: boolean;
+}
+
+// Bono o penalizador del jugador a sus ataques o daño (varios, cada uno con su tipo)
+export interface CustomMod {
+  id: string;
+  label: string;
+  value: number;
+  type: BonusType;
+  to: "atk" | "dmg";
+  on: boolean;
+}
+
+// Configuración de un conjuro (por nombre): sirve en todos los espacios donde aparezca
+export interface SpellMeta {
+  desc?: string;
+  kind?: SpellKind;
+  save?: SaveKey;
+  basic?: boolean;
+  dmg?: string;
+  ty?: string;
+  heal?: boolean;
+  // Activa la Magia de sangre del hechicero
+  blood?: boolean;
+  fx?: MagicDesign;
+  // Impulsos del kineticista
+  el?: string;
+  overflow?: boolean;
+  junction?: boolean;
+}
+
+export interface Rune {
+  n: string;
+  note?: string;
+}
+
+// Preferencias de los rasgos de clase que solo anota el dueño
+export interface ClassPrefs {
+  edge?: HunterEdge;
+  rageDmg?: string;
+  rageType?: string;
+  autoRage?: boolean;
+  // Golpe de conjuro: una sola tirada con el ataque del arma
+  ssSingle?: boolean;
+  runes?: Rune[];
+  tactics?: string[];
+  ikons?: string[];
+  impulses?: string[];
+  empower?: boolean;
+  sneakManual?: boolean;
+  fontChoice?: ("heal" | "harm")[];
+  // Color de cada efecto de clase
+  colors?: Record<string, string>;
+  // Efecto al crear siervos (nigromante)
+  thrallFx?: "void" | "spirit";
+  // Elemento del aura cinética (si no se detecta de las dotes)
+  element?: string;
 }
 
 export interface AddedEntry {
@@ -34,7 +106,18 @@ export interface Extras {
   money?: { cp: number; sp: number; gp: number; pp: number };
   notes?: Record<string, string>;
   pets?: Record<number, PetStats>;
+  mods?: CustomMod[];
+  spells?: Record<string, SpellMeta>;
+  // Filas de conjuro agregadas a mano, por grupo ("rep:<lanzador>:<rango>", "impulse"…)
+  addedSpells?: Record<string, string[]>;
+  // Conjuros distintivos, por lanzador
+  signature?: Record<string, string[]>;
+  cls?: ClassPrefs;
+  // Diseño y color de los efectos de magia
+  magicFx?: { design?: MagicDesign; color?: string };
 }
+
+export const spellKey = (name: string) => name.trim().toLowerCase();
 
 type Listener = () => void;
 const listeners = new Set<Listener>();

@@ -1,13 +1,15 @@
 import { useState } from "react";
 import { SHIELDS } from "../pathbuilder";
-import type { PcState } from "../live";
-import { applyDamage, shieldBlock, shieldBroken, shieldDestroyed, shieldRepair, type ShieldState } from "../rules";
+import { shieldBroken, shieldDestroyed, shieldRepair, type ShieldState } from "../rules";
 import { CondIcon } from "./bits";
 
+// Sirve para PJ (estado de la sala) y PNJ (estado del token)
 interface Props {
-  state: PcState;
+  shield?: ShieldState;
   canEdit: boolean;
-  onPatch: (fn: (s: PcState) => PcState) => void;
+  onSet: (fn: (s: ShieldState | undefined) => ShieldState | undefined) => void;
+  // Bloquear: resta la dureza; el resto lo reciben el escudo y quien lo lleva
+  onBlock: (damage: number) => void;
 }
 
 type Form = { name: string; bonus: string; hp: string; hardness: string };
@@ -27,10 +29,9 @@ const toForm = (s?: ShieldState): Form => ({
   hardness: String(s?.hardness ?? 3),
 });
 
-export function ShieldCard({ state, canEdit, onPatch }: Props) {
+export function ShieldCard({ shield, canEdit, onSet, onBlock }: Props) {
   const [form, setForm] = useState<Form | null>(null);
   const [amount, setAmount] = useState("");
-  const shield = state.shield;
 
   if (form) {
     const save = () => {
@@ -43,7 +44,7 @@ export function ShieldCard({ state, canEdit, onPatch }: Props) {
         hp: shield ? Math.min(shield.hp, maxHp) : maxHp,
         raised: false,
       };
-      onPatch((x) => ({ ...x, shield: next }));
+      onSet(() => next);
       setForm(null);
     };
     const field = (key: keyof Form, label: string, numeric = true) => (
@@ -95,7 +96,7 @@ export function ShieldCard({ state, canEdit, onPatch }: Props) {
             <button
               className="btn danger"
               onClick={() => {
-                onPatch((x) => ({ ...x, shield: undefined }));
+                onSet(() => undefined);
                 setForm(null);
               }}
             >
@@ -153,7 +154,7 @@ export function ShieldCard({ state, canEdit, onPatch }: Props) {
             className={`btn ${shield.raised ? "on" : ""}`}
             disabled={broken}
             title="El bono se suma a la CA hasta el inicio de tu turno"
-            onClick={() => onPatch((x) => (x.shield ? { ...x, shield: { ...x.shield, raised: !x.shield.raised } } : x))}
+            onClick={() => onSet((x) => (x ? { ...x, raised: !x.raised } : x))}
           >
             {shield.raised ? "Bajar escudo" : "Alzar escudo"}
           </button>
@@ -163,12 +164,7 @@ export function ShieldCard({ state, canEdit, onPatch }: Props) {
             title="Resta la dureza y el resto lo reciben el escudo y el PJ"
             onClick={() => {
               const dmg = n();
-              if (!dmg) return;
-              onPatch((x) => {
-                if (!x.shield) return x;
-                const { shield: s2, through } = shieldBlock(x.shield, dmg);
-                return applyDamage({ ...x, shield: s2 }, through);
-              });
+              if (dmg) onBlock(dmg);
             }}
           >
             Bloquear
@@ -177,7 +173,7 @@ export function ShieldCard({ state, canEdit, onPatch }: Props) {
             className="btn heal"
             onClick={() => {
               const rep = n();
-              if (rep) onPatch((x) => (x.shield ? { ...x, shield: shieldRepair(x.shield, rep) } : x));
+              if (rep) onSet((x) => (x ? shieldRepair(x, rep) : x));
             }}
           >
             Reparar

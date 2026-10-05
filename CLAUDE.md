@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Owlbear Rodeo extension (SDK v3) for Pathfinder 2e. It imports Pathbuilder 2e JSON sheets, rolls 3D dice with the bonuses already added, applies PF2e conditions and rules, and keeps HP/AC in sync with map tokens. Stack: React 19, Vite 8, TypeScript. All UI text and code comments are in **Spanish**; keep them that way.
 
-The pending feature list lives in `Prompts pendientes.docx`, which is not committed. The work is split into phases: 1 dice ✅, 2 rules/sheet/GM tab ✅, 3 combat/initiative ✅, 4 side tabs (Dotes, Inventario, Magia, Recetas, Mascota) ✅, 5 map VFX ✅.
+The pending feature lists live in `Prompts pendientes.docx` and `Prompts pendientes_v2.docx`, which are not committed. The work is split into phases: 1 dice ✅, 2 rules/sheet/GM tab ✅, 3 combat/initiative ✅, 4 side tabs (Dotes, Inventario, Magia, Recetas, Mascota) ✅, 5 map VFX ✅, 6 (v2 list: NPC sheets, saves, IWR, targets, spell casting, class features, more VFX) ✅.
 
 ## Commands
 
@@ -58,7 +58,16 @@ There are four Vite entry pages, each its own Owlbear iframe:
   - Resources the GM can also change (focus points, spent slots, Advanced Alchemy, Versatile Vials) go in `PcState.res`. Slot keys are `"<caster>:<rank>"`: a spent count for spontaneous casters, a bitmask for prepared ones.
   - The owner's notes (quantities, invested, money, renamed entries, feat notes, pet modifiers) go in `Extras` (`src/extras.ts`, localStorage `pf2.extras.<charId>`). They're published with the sheet in player metadata, so the GM sees them read-only.
   - Pets get their own `PcState` (`petStateId()`, `pet` field) to reuse HP bars, the token editor and the GM panel. They're left out of initiative.
+  - The eidolon has `pet.shared`: its HP live in the summoner's state. Always patch HP through `live.hpHolder(id)` (or `dealDamage`/`healTarget`).
+  - Spell config (description, attack/save/effect, damage, effect design) is in `Extras.spells`, keyed by spell name.
+- **Targets and class state** (in `PcState`): `target` (NPC token the PC attacks), `color` (its target ring), `iwr`, and `cls` (`ClassState` from `src/classes.ts`: rage, panache, prey, taunt, stratagem, overdrive, runes…). NPCs keep the same kind of data in their token (`level`, `num`, `saves`, `attacks`, `spells`, `shield`, `iwr`, `target`).
 - **Rolls**: sent with `OBR.broadcast` on `CHANNEL_ROLL` (destination ALL). `visibleEntry()` hides secret rolls from non-GMs. The log and toasts are kept per browser.
+  - `kind: "note"` entries are notices without dice (spell cast, tactic, rune…). They're published with `notify()`.
+  - `RollRequest.vs` compares the roll with a DC/AC and fills `degree`; the DC is only shown when `showDc` is set.
+- **Shared requests** (`src/requests.ts`): one room key per request so players don't overwrite each other.
+  - Damage requests (`${ID}/dmg/<id>`): a PC hits an NPC; the GM authorizes it (with IWR) in GM → "Daño pendiente".
+  - Save effects (`${ID}/sv/<id>`) and one result key per target (`${ID}/svr/<id>|<target>`). They stay until the GM closes them.
+- **Popover actions**: `ActionsContext` (`src/popover/ctx.ts`) gives `roll`, `notify`, `publish` and `playFx` to any panel.
 - **Combat** (`src/combat.ts`):
   - The `Combat` object (round, current turn, NPC combatants, excluded PCs) lives in one room key, `META_COMBAT`, and **only the GM writes it**.
   - Each PC's initiative lives in its own `PcState.init`, so players rolling at the same moment don't overwrite each other.
@@ -67,6 +76,14 @@ There are four Vite entry pages, each its own Owlbear iframe:
     - end of turn: persistent damage, Frightened −1;
     - start of turn: fast healing, lower the shield, recovery check.
   - The background script draws the gold ring on the token whose turn it is and notifies that PC's owner.
+
+### Damage, targets and class features
+
+- `src/damage.ts` applies damage/healing to any target (`TargetRef`: PC/pet or NPC token) with immunity, resistance (highest only), weakness (added after the total) and shield block. Use it instead of patching HP directly.
+- `src/classes.ts` is pure: `featuresOf(c)` detects class features **by feat/special name** (so archetype dedications work too) and has the per-level numbers.
+- `src/strike.ts` is pure: weapon attack and damage with conditions, the player's custom mods, the chosen target and class features (Rage, Sneak Attack, Precise Strike, stratagem…).
+- Temporary bonuses from others (Courageous Anthem, taunt's off-guard…) are `Buff`s inside `Conditions.buffs`. `until` expires them at the start/end of someone's turn (`expireAll` in `turns.ts`).
+- The Guardian's taunt is stored on the guardian (`cls.taunt`) and applied when the NPC attacks, because players can't write NPC tokens.
 
 ### Rules engine
 
@@ -99,7 +116,10 @@ The UI shows values that already include conditions.
 - Triggers:
   - Heal, damage, shield and stars are derived on **each client** by comparing PC/pet state (`live`) and NPC token state with the previous snapshot. No messages are needed.
   - Weapon and spell attacks travel in the roll itself (`RollEntry.charId` + `fx`).
+  - Effects that must be seen even when the roll is secret (NPC attacks, class effects) go on `CHANNEL_FX`. `RollFx.from`/`to` are token ids or `pc:<id>`; with `to`, attacks fly toward that token (`playAttackTo`).
   - Players don't see effects on tokens that are hidden from them.
+- Every shader receives `uniform vec3 col` (the chosen color). Magic designs (`MAGIC_DESIGNS`) and class effects (`CLASS_FX`) live in `fx.ts`; colors chosen by the player are in `Extras.magicFx` and `Extras.cls.colors`.
+- The background also draws target rings (`syncTargets`) in each PC's/NPC's color, and markers for prey, taunt, exploit and thralls on NPC tokens.
 
 ## Conventions
 

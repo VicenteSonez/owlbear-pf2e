@@ -1,28 +1,31 @@
 import { useState } from "react";
 import type { Character } from "../pathbuilder";
-import type { PcState } from "../live";
+import { live, type PcState } from "../live";
 import { parseFormula } from "../dice";
 import {
   COVERS,
   CONDITIONS,
   DEATH_DYING,
-  applyDamage,
-  applyHealing,
   effectiveAc,
   effectiveMaxHp,
   modsText,
+  withoutBuff,
   type ConditionDef,
   type Conditions,
 } from "../rules";
-import { hpColor, newId, type NpcState } from "../shared";
+import { hpColor, newId, npcLabel, type NpcState } from "../shared";
+import { dealDamage, healTarget, type TargetRef } from "../damage";
 import { Pips, iconUrl } from "./bits";
+import { DamageBox, IwrEditor } from "./DamageBox";
+import { NpcSheet } from "./NpcSheet";
 
 export type Target =
   | { kind: "pc"; state: PcState; sheet?: Character }
-  | { kind: "npc"; tokenId: string; state: NpcState };
+  | { kind: "npc"; tokenId: string; state: NpcState; itemName?: string };
 
 interface Props {
   target: Target;
+  states: Record<string, PcState>;
   onPatchPc: (id: string, fn: (s: PcState) => PcState) => void;
   onPatchNpc: (tokenId: string, fn: (n: NpcState) => NpcState) => void;
   onOpenSheet: (id: string) => void;
@@ -41,8 +44,7 @@ function clean(c: Conditions): Conditions {
   return out;
 }
 
-export function EffectsPanel({ target, onPatchPc, onPatchNpc, onOpenSheet, onRemove, onResolvePersistent }: Props) {
-  const [amount, setAmount] = useState("");
+export function EffectsPanel({ target, states, onPatchPc, onPatchNpc, onOpenSheet, onRemove, onResolvePersistent }: Props) {
   const [pFormula, setPFormula] = useState("");
   const [pType, setPType] = useState("");
   const [pError, setPError] = useState<string | null>(null);
@@ -51,9 +53,12 @@ export function EffectsPanel({ target, onPatchPc, onPatchNpc, onOpenSheet, onRem
   const isPc = target.kind === "pc";
   const st = target.state;
   const cond = st.cond ?? {};
-  const maxHp = isPc ? effectiveMaxHp(target.state.maxHp, target.state.level, cond) : target.state.maxHp;
-  const { ac, applied } = effectiveAc(st.baseAc, st.acAdj, cond, isPc ? target.state.shield : undefined);
-  const name = st.name;
+  // El eidolón muestra los PG de su invocador
+  const hpSrc = target.kind === "pc" && target.state.pet?.shared ? (live.get(target.state.pet.parent) ?? target.state) : st;
+  const maxHp = effectiveMaxHp(hpSrc.maxHp, hpSrc.level, hpSrc.cond ?? {});
+  const { ac, applied } = effectiveAc(st.baseAc, st.acAdj, cond, st.shield);
+  const name = target.kind === "npc" ? npcLabel({ name: target.itemName || st.name, num: target.state.num }) : st.name;
+  const ref: TargetRef = target.kind === "pc" ? { kind: "pc", id: target.state.id } : { kind: "npc", tokenId: target.tokenId };
 
   // Cambia condiciones sobre el estado más reciente. Drenado sube → pierde nivel×Δ PG (solo PJ).
   const updCond = (fn: (c: Conditions) => Conditions) => {
@@ -68,30 +73,19 @@ export function EffectsPanel({ target, onPatchPc, onPatchNpc, onOpenSheet, onRem
         return { ...s, cond: next, hp };
       });
     } else {
-      onPatchNpc(target.tokenId, (n) => ({ ...n, cond: clean(fn(n.cond ?? {})) }));
+      onPatchNpc(target.tokenId, (n) => {
+        const next = clean(fn(n.cond ?? {}));
+        const delta = (next.drained ?? 0) - (n.cond?.drained ?? 0);
+        let hp = n.hp;
+        if (delta > 0) hp = Math.max(0, hp - Math.max(1, n.level) * delta);
+        hp = Math.min(hp, effectiveMaxHp(n.maxHp, n.level, next));
+        return { ...n, cond: next, hp };
+      });
     }
   };
 
-  const changeHp = (mode: "damage" | "heal" | "temp") => {
-    const n = parseInt(amount, 10);
-    setAmount("");
-    const v = Number.isFinite(n) && n > 0 ? n : 0;
-    if (mode !== "temp" && !v) return;
-    if (target.kind === "pc") {
-      onPatchPc(target.state.id, (s) => {
-        if (mode === "temp") return { ...s, temp: v };
-        const max = effectiveMaxHp(s.maxHp, s.level, s.cond);
-        return mode === "damage" ? applyDamage(s, v) : applyHealing(s, v, max);
-      });
-    } else {
-      onPatchNpc(target.tokenId, (npc) => {
-        if (mode === "temp") return { ...npc, temp: v };
-        if (mode === "heal") return { ...npc, hp: Math.min(npc.maxHp, npc.hp + v) };
-        const hit = applyDamage({ hp: npc.hp, temp: npc.temp, dying: 0, wounded: 0 }, v);
-        return { ...npc, hp: hit.hp, temp: hit.temp };
-      });
-    }
-  };
+  const setTemp = (v: number) =>
+    target.kind === "pc" ? onPatchPc(live.hpHolder(target.state.id), (s) => ({ ...s, temp: v })) : onPatchNpc(target.tokenId, (n) => ({ ...n, temp: v }));
 
   const valued = (def: ConditionDef) => (cond[def.id] as number | undefined) ?? 0;
   const setValued = (def: ConditionDef, v: number) => updCond((c) => ({ ...c, [def.id]: Math.max(0, v) }));
@@ -110,7 +104,7 @@ export function EffectsPanel({ target, onPatchPc, onPatchNpc, onOpenSheet, onRem
     setPType("");
   };
 
-  const pct = Math.max(0, Math.min(100, (st.hp / Math.max(1, maxHp)) * 100));
+  const pct = Math.max(0, Math.min(100, (hpSrc.hp / Math.max(1, maxHp)) * 100));
 
   return (
     <div className="effects">
@@ -128,29 +122,13 @@ export function EffectsPanel({ target, onPatchPc, onPatchNpc, onOpenSheet, onRem
       </div>
 
       <div className="hp-bar">
-        <div className="hp-fill" style={{ width: `${pct}%`, background: hpColor(st.hp, maxHp) }} />
+        <div className="hp-fill" style={{ width: `${pct}%`, background: hpColor(hpSrc.hp, maxHp) }} />
         <span>
-          PG {st.hp}/{maxHp}
-          {st.temp ? ` · Temp ${st.temp}` : ""}
+          PG {hpSrc.hp}/{maxHp}
+          {hpSrc.temp ? ` · Temp ${hpSrc.temp}` : ""}
         </span>
       </div>
-      <div className="hp-ctrl">
-        <input
-          inputMode="numeric"
-          placeholder="Cant."
-          value={amount}
-          onChange={(e) => setAmount(e.target.value.replace(/\D/g, ""))}
-          onKeyDown={(e) => e.key === "Enter" && changeHp("damage")}
-        />
-        <button className="btn danger" onClick={() => changeHp("damage")}>
-          Daño
-        </button>
-        <button className="btn heal" onClick={() => changeHp("heal")}>
-          Curar
-        </button>
-        <button className="btn ghost" onClick={() => changeHp("temp")}>
-          Temp
-        </button>
+      <DamageBox iwr={st.iwr} shield={st.shield} onDamage={(n, o) => dealDamage(ref, n, o)} onHeal={(n) => healTarget(ref, n)} onTemp={setTemp}>
         <span className="ac-adj">
           CA
           <button onClick={() => (isPc ? onPatchPc(target.state.id, (s) => ({ ...s, acAdj: s.acAdj - 1 })) : onPatchNpc(target.tokenId, (n) => ({ ...n, acAdj: n.acAdj - 1 })))}>
@@ -160,7 +138,7 @@ export function EffectsPanel({ target, onPatchPc, onPatchNpc, onOpenSheet, onRem
             +
           </button>
         </span>
-      </div>
+      </DamageBox>
 
       {target.kind === "pc" && (
         <div className="status-row">
@@ -198,7 +176,7 @@ export function EffectsPanel({ target, onPatchPc, onPatchNpc, onOpenSheet, onRem
             <div key={def.id} className={`cond-cell ${active ? "on" : ""}`} title={def.desc}>
               <button
                 className="cond-toggle"
-                onClick={() => (def.valued ? setValued(def, active ? 0 : 1) : updCond((c) => ({ ...c, offGuard: !c.offGuard })))}
+                onClick={() => (def.valued ? setValued(def, active ? 0 : 1) : updCond((c) => ({ ...c, [def.id]: !c[def.id as "offGuard" | "fatigued"] })))}
               >
                 <img src={iconUrl(def.icon)} alt="" width={24} height={24} />
                 <span>{def.label}</span>
@@ -227,6 +205,19 @@ export function EffectsPanel({ target, onPatchPc, onPatchNpc, onOpenSheet, onRem
           );
         })}
       </div>
+
+      {(cond.buffs ?? []).length > 0 && (
+        <div className="buff-list">
+          {(cond.buffs ?? []).map((b) => (
+            <span key={b.id} className="chip on" title={[b.atk ? `Ataque ${b.atk > 0 ? "+" : ""}${b.atk}` : "", b.dmg ? `Daño +${b.dmg}` : "", b.ac ? `CA ${b.ac}` : "", b.vsOthers ? `${b.vsOthers.v} contra otros` : ""].filter(Boolean).join(" · ")}>
+              {b.icon && <img src={iconUrl(b.icon)} alt="" width={12} height={12} />} {b.n}
+              <button className="chip-x" title="Quitar" onClick={() => updCond((c) => withoutBuff(c, b.id))}>
+                ✕
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
 
       <h3>Daño persistente</h3>
       <div className="persist">
@@ -261,18 +252,15 @@ export function EffectsPanel({ target, onPatchPc, onPatchNpc, onOpenSheet, onRem
         )}
       </div>
 
-      {target.kind === "npc" && (
+      {target.kind === "pc" && (
         <>
-          <h3>PNJ</h3>
-          <div className="te-row">
-            <NumInput label="PG máx" value={target.state.maxHp} onCommit={(n) => onPatchNpc(target.tokenId, (x) => ({ ...x, maxHp: Math.max(1, n), hp: Math.min(x.hp, Math.max(1, n)) }))} />
-            <NumInput label="CA base" value={target.state.baseAc} onCommit={(n) => onPatchNpc(target.tokenId, (x) => ({ ...x, baseAc: n }))} />
-            <label className="te-check">
-              <input type="checkbox" checked={target.state.hidden} onChange={(e) => onPatchNpc(target.tokenId, (x) => ({ ...x, hidden: e.target.checked }))} />
-              Ocultar a jugadores
-            </label>
-          </div>
+          <h3>Inmunidades, resistencias y debilidades</h3>
+          <IwrEditor iwr={target.state.iwr} canEdit onChange={(iwr) => onPatchPc(target.state.id, (s) => ({ ...s, iwr }))} />
         </>
+      )}
+
+      {target.kind === "npc" && (
+        <NpcSheet tokenId={target.tokenId} itemName={target.itemName ?? target.state.name} state={target.state} states={states} onPatch={(fn) => onPatchNpc(target.tokenId, fn)} />
       )}
 
       <div className="fx-actions">
@@ -298,30 +286,5 @@ export function EffectsPanel({ target, onPatchPc, onPatchNpc, onOpenSheet, onRem
         )}
       </div>
     </div>
-  );
-}
-
-function NumInput({ label, value, onCommit }: { label: string; value: number; onCommit: (n: number) => void }) {
-  const [text, setText] = useState(String(value));
-  const [prev, setPrev] = useState(value);
-  if (prev !== value) {
-    setPrev(value);
-    setText(String(value));
-  }
-  return (
-    <label className="te-field">
-      <span>{label}</span>
-      <input
-        inputMode="numeric"
-        value={text}
-        onChange={(e) => setText(e.target.value.replace(/[^\d-]/g, ""))}
-        onBlur={() => {
-          const n = parseInt(text, 10);
-          if (Number.isFinite(n)) onCommit(n);
-          else setText(String(value));
-        }}
-        onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
-      />
-    </label>
   );
 }

@@ -9,17 +9,20 @@ export function LogList({ log, compact }: { log: RollEntry[]; compact?: boolean 
   return (
     <ul className={`log ${compact ? "compact" : ""}`}>
       {log.map((e) => {
-        const hidden = Number.isNaN(e.total) || e.total === null;
+        const note = e.kind === "note";
+        const hidden = !note && (Number.isNaN(e.total) || e.total === null);
         return (
           <li key={e.id} className={e.nat === 20 ? "nat20" : e.nat === 1 ? "nat1" : ""}>
             <div>
               <span className="muted">{time(e.time)}</span>{" "}
               <span style={{ color: readableColor(e.playerColor) }}>{e.playerName}</span>
               {e.charName && !compact ? <span className="muted"> ({e.charName})</span> : null} — {e.secret ? "🔒 " : ""}
-              {e.label}: <b>{hidden ? "enviada al GM" : e.total}</b>
+              {e.label}
+              {e.targetName ? <span className="muted"> → {e.targetName}</span> : null}
+              {note ? (e.detail ? <span className="muted">: {e.detail}</span> : null) : <>: <b>{hidden ? "enviada al GM" : e.total}</b></>}
               {!hidden && e.degree ? <span className={e.degree.includes("success") ? "deg ok" : "deg fail"}> {DEGREE_LABEL[e.degree]}</span> : null}
             </div>
-            {!hidden && !compact && (
+            {!note && !hidden && !compact && (
               <small className="muted">
                 {e.formula}: {e.detail}
                 {e.notes ? ` · ${e.notes}` : ""}
