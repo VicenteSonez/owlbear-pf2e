@@ -5,7 +5,7 @@
 //   resultado va en su propia clave y el efecto queda en el historial hasta que todos tiren.
 import { useEffect, useState } from "react";
 import OBR from "@owlbear-rodeo/sdk";
-import { ID, type SaveKey } from "./shared";
+import { ID, type PersistentSpec, type SaveKey } from "./shared";
 import { inOwlbear, whenReady } from "./obr";
 import type { Degree } from "./rules";
 
@@ -24,6 +24,10 @@ export interface DamageReq {
   // Debilidad mortal (taumaturgo): activa la mayor debilidad del objetivo
   mortal?: boolean;
   heal?: boolean;
+  // Daño persistente que deja el golpe (con crítico se duplica)
+  pers?: PersistentSpec[];
+  // Partes del daño de otro tipo ("1d4 fuego"), para que el GM las vea
+  typed?: string[];
   t: number;
 }
 

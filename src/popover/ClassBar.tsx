@@ -7,6 +7,8 @@ import type { ClassPrefs, Extras } from "../extras";
 import { DEGREE_LABEL, checkAdjust, levelDc, withBuff, type Degree } from "../rules";
 import {
   HUNTER_EDGE_LABEL,
+  IMPLEMENTS,
+  IMPLEMENT_KIND_LABEL,
   etchMax,
   featuresOf,
   overdriveBonus,
@@ -14,6 +16,7 @@ import {
   panacheSpeedIdle,
   type ClassState,
   type HunterEdge,
+  type ImplementKind,
 } from "../classes";
 import { defaultColor, type FxKind, type MagicDesign } from "../fx";
 import { useCombat } from "../combat";
@@ -51,7 +54,7 @@ export function classSpeed(c: Character, s?: PcState) {
   return { value, notes: notes.join(", ") };
 }
 
-type Panel = "rage" | "exploit" | "prey" | "panache" | "strat" | "taunt" | "od" | "psyche" | "spark" | "curse" | "ss" | "tactics" | "invoke" | "aura";
+type Panel = "rage" | "exploit" | "impl" | "prey" | "panache" | "strat" | "taunt" | "od" | "psyche" | "spark" | "curse" | "ss" | "tactics" | "invoke" | "aura";
 
 export function ClassBar({ character: c, state, extras, canEdit, canEditExtras, updateExtras, onPatch }: Props) {
   const { roll, notify, playFx } = useActions();
@@ -62,6 +65,7 @@ export function ClassBar({ character: c, state, extras, canEdit, canEditExtras, 
   const [exploitRoll, setExploitRoll] = useState<{ tok: string; degree: Degree } | null>(null);
   const [other, setOther] = useState("");
   const [invokeSel, setInvokeSel] = useState<string[]>([]);
+  const [newImpl, setNewImpl] = useState("");
   const cls: ClassState = state?.cls ?? {};
   const prefs: ClassPrefs = extras.cls ?? {};
   const me = `pc:${c.id}`;
@@ -75,30 +79,40 @@ export function ClassBar({ character: c, state, extras, canEdit, canEditExtras, 
   const npcName = (tok?: string) => npcs.find((n) => n.tok === tok)?.name ?? "PNJ";
   const skill = (pred: (key: string) => boolean) => c.skills.find((s) => pred(s.key.toLowerCase()));
 
-  const buttons: { id: Panel; label: string; on?: boolean; show: boolean; glow?: boolean; title?: string }[] = [
-    { id: "rage", label: "Furia", on: !!cls.rage, show: f.rage, title: "Furia: PG temporales y daño extra cuerpo a cuerpo" },
-    { id: "exploit", label: "Explotar vulnerabilidad", on: !!cls.exploit, show: f.exploit },
-    { id: "prey", label: "Presa", on: !!cls.prey, show: f.huntPrey },
-    { id: "panache", label: "Panache", on: !!cls.panache, show: f.panache },
-    { id: "strat", label: "Estratagema", on: !!cls.strat, show: f.stratagem },
-    { id: "taunt", label: "Provocar", on: !!cls.taunt, show: f.taunt },
-    { id: "od", label: "Sobrecarga", on: !!cls.od, show: f.overdrive > 0 },
+  const implList = prefs.implements ?? [];
+  const activeImpl = cls.impl ?? [];
+  const exploitText = cls.exploit
+    ? `${npcName(cls.exploit.tok)} · ${cls.exploit.mode === "anti" ? "Antítesis" : cls.exploit.mode === "mortal" ? "Debilidad mortal" : (cls.exploit.note ?? "Otro")}`
+    : "Sin objetivo";
+  // Cada rasgo es una tarjeta con su estado actual debajo del nombre
+  const buttons: { id: Panel; label: string; sub?: string; on?: boolean; show: boolean; glow?: boolean; title?: string; icon: string }[] = [
+    { id: "rage", label: "Furia", icon: "🔥", sub: cls.rage ? "Activa" : state?.cond.fatigued ? "Fatigado" : "Inactiva", on: !!cls.rage, show: f.rage, title: "Furia: PG temporales y daño extra cuerpo a cuerpo" },
+    { id: "exploit", label: "Explotar vulnerabilidad", icon: "👁", sub: exploitText, on: !!cls.exploit, show: f.exploit },
+    { id: "impl", label: "Implementos", icon: "🔔", sub: activeImpl.length ? activeImpl.join(" · ") : implList.length ? "Ninguno activo" : "Agrega tus implementos", on: activeImpl.length > 0, show: f.thaumaturge },
+    { id: "prey", label: "Presa", icon: "🎯", sub: cls.prey ? npcName(cls.prey) : "Sin presa", on: !!cls.prey, show: f.huntPrey },
+    { id: "panache", label: "Panache", icon: "✨", sub: cls.panache ? "Con Panache" : "Sin Panache", on: !!cls.panache, show: f.panache },
+    { id: "strat", label: "Estratagema", icon: "🧠", sub: cls.strat ? `d20 = ${cls.strat.v}` : "Sin tirar", on: !!cls.strat, show: f.stratagem },
+    { id: "taunt", label: "Provocar", icon: "🛡", sub: cls.taunt ? npcName(cls.taunt) : "Nadie provocado", on: !!cls.taunt, show: f.taunt },
+    { id: "od", label: "Sobrecarga", icon: "⚙", sub: cls.od ? `+${cls.od.b} al daño` : cls.odCd ? `Espera ${cls.odCd} rondas` : "Inactiva", on: !!cls.od, show: f.overdrive > 0 },
     {
       id: "psyche",
       label: "Desatar psique",
+      icon: "🌀",
+      sub: cls.psyche ? `${cls.psyche} rondas` : "Inactiva",
       on: !!cls.psyche,
       show: f.unleash || f.psychic,
       glow: combat.active && cls.castR !== undefined && cls.castR === combat.round - 1 && !cls.psyche,
     },
-    { id: "spark", label: cls.spark ? `Chispa: ${cls.spark}` : "Chispa divina", on: !!cls.spark, show: f.spark },
-    { id: "curse", label: `Maldición ${cls.curse ?? 0}`, on: !!cls.curse, show: f.curse },
-    { id: "ss", label: "Golpe de conjuro", on: !!cls.ss?.armed, show: f.spellstrike },
-    { id: "tactics", label: "Tácticas", show: f.tactics > 0 },
-    { id: "invoke", label: "Invocar runas", show: f.runes },
-    { id: "aura", label: "Aura cinética", on: !!cls.aura, show: f.kineticAura },
+    { id: "spark", label: "Chispa divina", icon: "☀", sub: cls.spark ? `En ${cls.spark}` : "Sin ícono", on: !!cls.spark, show: f.spark },
+    { id: "curse", label: "Maldición", icon: "🌒", sub: `Nivel ${cls.curse ?? 0}`, on: !!cls.curse, show: f.curse },
+    { id: "ss", label: "Golpe de conjuro", icon: "⚡", sub: cls.ss?.used ? "Usado (recargar)" : cls.ss?.armed ? "Preparado" : "Listo", on: !!cls.ss?.armed, show: f.spellstrike },
+    { id: "tactics", label: "Tácticas", icon: "🚩", sub: `${(prefs.tactics ?? []).filter(Boolean).length}/${f.tactics} preparadas`, show: f.tactics > 0 },
+    { id: "invoke", label: "Invocar runas", icon: "ᚱ", sub: `${Object.values(cls.etched ?? {}).reduce((a, b) => a + b, 0) + (cls.traced?.length ?? 0)} activas`, show: f.runes },
+    { id: "aura", label: "Aura cinética", icon: "💠", sub: cls.aura ? "Activa" : "Apagada", on: !!cls.aura, show: f.kineticAura },
   ];
   const shown = buttons.filter((b) => b.show);
   if (!shown.length) return null;
+  const openPanel = shown.some((b) => b.id === open) ? open : null;
 
   // ---------- Acciones ----------
 
@@ -112,7 +126,7 @@ export function ClassBar({ character: c, state, extras, canEdit, canEditExtras, 
     const temp = c.level + c.abilities.con;
     onPatch((s) => ({ ...s, temp: Math.max(s.temp, temp), cls: { ...s.cls, rage: true } }));
     playFx({ kind: "rage", from: me, color: color("rage") });
-    notify({ label: `${c.name} entra en Furia`, detail: `+${temp} PG temporales`, tag: "Furia" });
+    notify({ label: "Entra en", title: "Furia", detail: `+${temp} PG temporales`, tag: "Furia" });
   };
 
   const rollExploit = async (tok: string) => {
@@ -135,7 +149,7 @@ export function ClassBar({ character: c, state, extras, canEdit, canEditExtras, 
         cls: { ...s.cls, exploit: undefined },
         cond: withBuff(s.cond, { id: "exploit-og", n: "Desprevenido (Explotar)", ty: "circumstance", ac: -2, icon: "off-guard", until: { key: me, at: "start" } }),
       }));
-      notify({ label: `${c.name} falla críticamente al explotar a ${target.name}`, detail: "Queda desprevenido hasta su próximo turno", tag: "Explotar" });
+      notify({ label: `Fallo crítico contra ${target.name}:`, title: "Explotar vulnerabilidad", detail: "Queda desprevenido hasta su próximo turno", tag: "Explotar" });
       setExploitRoll(null);
       return;
     }
@@ -146,7 +160,7 @@ export function ClassBar({ character: c, state, extras, canEdit, canEditExtras, 
     if (!exploitRoll) return;
     const label = mode === "anti" ? "Antítesis personal" : mode === "mortal" ? "Debilidad mortal" : other.trim() || "Otro";
     patchCls((k) => ({ ...k, exploit: { tok: exploitRoll.tok, mode, note: mode === "other" ? label : undefined } }));
-    notify({ label: `${c.name} explota a ${npcName(exploitRoll.tok)}`, detail: label, tag: "Explotar" });
+    notify({ label: `Explota a ${npcName(exploitRoll.tok)}:`, title: label, detail: "Explotar vulnerabilidad", tag: "Explotar" });
     setExploitRoll(null);
     setOther("");
   };
@@ -155,7 +169,7 @@ export function ClassBar({ character: c, state, extras, canEdit, canEditExtras, 
     patchCls((k) => ({ ...k, prey: tok, edge }));
     if (tok) {
       playFx({ kind: "prey", from: tok, color: color("prey") });
-      notify({ label: `${c.name} caza a ${npcName(tok)}`, tag: "Presa" });
+      notify({ label: "Caza a su presa:", title: npcName(tok), tag: "Presa" });
     }
   };
 
@@ -164,7 +178,7 @@ export function ClassBar({ character: c, state, extras, canEdit, canEditExtras, 
     else {
       patchCls((k) => ({ ...k, panache: true }));
       playFx({ kind: "panache", from: me, color: color("panache") });
-      notify({ label: `${c.name} gana Panache`, tag: "Panache" });
+      notify({ label: "Gana", title: "Panache", tag: "Panache" });
     }
   };
 
@@ -180,7 +194,7 @@ export function ClassBar({ character: c, state, extras, canEdit, canEditExtras, 
     patchCls((k) => ({ ...k, taunt: tok }));
     if (tok) {
       playFx({ kind: "taunt", from: tok, color: color("taunt") });
-      notify({ label: `${c.name} provoca a ${npcName(tok)}`, tag: "Provocar" });
+      notify({ label: "Provoca a:", title: npcName(tok), tag: "Provocar" });
     }
   };
 
@@ -199,14 +213,14 @@ export function ClassBar({ character: c, state, extras, canEdit, canEditExtras, 
     if (bonus) {
       patchCls((k) => ({ ...k, od: bonus, odCd: r.degree === "crit-success" ? 10 : k.odCd }));
       playFx({ kind: "overdrive", from: me, color: color("overdrive") });
-      notify({ label: `${c.name}: Sobrecarga`, detail: `${DEGREE_LABEL[r.degree]} · +${bonus.b} al daño${bonus.fire ? " de fuego" : ""}`, tag: "Sobrecarga" });
+      notify({ label: `Sobrecarga (${DEGREE_LABEL[r.degree]}):`, title: `+${bonus.b} al daño${bonus.fire ? " de fuego" : ""}`, tag: "Sobrecarga" });
     } else {
       const dmg = Math.ceil(c.level / 2);
       const cd = randomDie(4);
       patchCls((k) => ({ ...k, od: undefined, odCd: cd }));
       playFx({ kind: "explode", from: me, color: color("explode") });
       await dealDamage({ kind: "pc", id: c.id }, dmg, { type: "fuego" });
-      notify({ label: `${c.name}: ¡la Sobrecarga explota!`, detail: `${dmg} de daño · sin Sobrecarga por ${cd} rondas`, tag: "Sobrecarga" });
+      notify({ label: "Sobrecarga:", title: "¡Explota!", detail: `${dmg} de daño · sin Sobrecarga por ${cd} rondas`, tag: "Sobrecarga" });
     }
   };
 
@@ -215,16 +229,16 @@ export function ClassBar({ character: c, state, extras, canEdit, canEditExtras, 
     else {
       patchCls((k) => ({ ...k, psyche: 2 }));
       playFx({ kind: magicDesign, from: me, color: magicColor });
-      notify({ label: `${c.name} desata su psique`, detail: "+2×rango al daño de sus conjuros por 2 rondas", tag: "Psique" });
+      notify({ label: "Desata su", title: "Psique", detail: "+2×rango al daño de sus conjuros por 2 rondas", tag: "Psique" });
     }
   };
 
   const setSpark = (ikon?: string, transcend = false) => {
     patchCls((k) => ({ ...k, spark: ikon }));
     playFx({ kind: "divine", from: me, color: color("divine") });
-    if (transcend) notify({ label: `${c.name} trasciende con ${cls.spark}`, tag: "Trascendencia" });
-    else if (ikon) notify({ label: `Chispa divina inmanente: ${ikon}`, tag: "Inmanencia" });
-    else notify({ label: `${c.name} apaga su chispa divina`, tag: "Chispa" });
+    if (transcend) notify({ label: "Trasciende con su chispa divina:", title: cls.spark, tag: "Trascendencia" });
+    else if (ikon) notify({ label: "Chispa divina inmanente en:", title: ikon, tag: "Inmanencia" });
+    else notify({ label: "Apaga su", title: "Chispa divina", tag: "Chispa" });
   };
 
   const setCurse = (v: number) => {
@@ -234,7 +248,7 @@ export function ClassBar({ character: c, state, extras, canEdit, canEditExtras, 
   };
 
   const useTactic = (name: string) => {
-    notify({ label: `Táctica: ${name}`, tag: "Táctica" });
+    notify({ label: "Usa la táctica:", title: name, tag: "Táctica" });
     playFx({ kind: "banner", from: me, color: color("banner") });
   };
 
@@ -260,10 +274,23 @@ export function ClassBar({ character: c, state, extras, canEdit, canEditExtras, 
       for (const key of Object.keys(etched)) if (!etched[key]) delete etched[key];
       return { ...k, etched: Object.keys(etched).length ? etched : undefined, traced: traced.length ? traced : undefined };
     });
-    notify({ label: `${c.name} invoca: ${chosen.map((r) => runeLabel(runes, r.k)).join(" + ")}`, tag: "Runas" });
+    notify({ label: "Invoca:", title: chosen.map((r) => runeLabel(runes, r.k)).join(" + "), tag: "Runas" });
     playFx({ kind: "arcane", from: me, color: color("arcane") });
     setInvokeSel([]);
   };
+
+  // Implementos: el activo es el que tiene en la mano; "Usar" avisa a la mesa con su efecto
+  const toggleImpl = (n: string) => patchCls((k) => {
+    const cur = k.impl ?? [];
+    const next = cur.includes(n) ? cur.filter((x) => x !== n) : [...cur, n];
+    return { ...k, impl: next.length ? next : undefined };
+  });
+  const useImpl = (n: string, kind: ImplementKind, note?: string) => {
+    notify({ label: `Usa su implemento (${IMPLEMENT_KIND_LABEL[kind]}):`, title: n, detail: note, tag: "Implemento" });
+    playFx({ kind: "occult", from: me, color: color("occult") });
+  };
+  const setImpl = (i: number, patch: Partial<{ n: string; kind: ImplementKind; note?: string }>) =>
+    setPrefs((p) => ({ ...p, implements: (p.implements ?? []).map((x, j) => (j === i ? { ...x, ...patch } : x)) }));
 
   const toggleAura = () => {
     if (cls.aura) patchCls((k) => ({ ...k, aura: undefined }));
@@ -271,7 +298,7 @@ export function ClassBar({ character: c, state, extras, canEdit, canEditExtras, 
       patchCls((k) => ({ ...k, aura: true }));
       const el = (prefs.element ?? f.elements[0] ?? "fire") as MagicDesign;
       playFx({ kind: el, from: me, color: color(el) });
-      notify({ label: `${c.name} activa su aura cinética`, tag: "Aura" });
+      notify({ label: "Activa su", title: "Aura cinética", tag: "Aura" });
     }
   };
 
@@ -290,7 +317,7 @@ export function ClassBar({ character: c, state, extras, canEdit, canEditExtras, 
   );
 
   const panel = () => {
-    switch (open) {
+    switch (openPanel) {
       case "rage":
         return (
           <>
@@ -371,6 +398,73 @@ export function ClassBar({ character: c, state, extras, canEdit, canEditExtras, 
                 <input type="checkbox" checked={prefs.empower ?? true} disabled={!canEditExtras} onChange={(e) => setPrefs((p) => ({ ...p, empower: e.target.checked }))} />
                 Potenciación del implemento (+2 al daño de armas)
               </label>
+            )}
+          </>
+        );
+      case "impl":
+        return (
+          <>
+            {!implList.length && <p className="muted small">Agrega tus implementos abajo (Amulet, Bell, Chalice…). Marca los que tienes en la mano y pulsa Usar para avisar a la mesa.</p>}
+            {implList.map((im, i) => {
+              const active = activeImpl.includes(im.n);
+              return (
+                <div key={`${im.n}${i}`} className={`impl-card ${active ? "on" : ""}`}>
+                  <div className="cb-row">
+                    <button className={`chip ${active ? "on" : ""}`} disabled={!canEdit} title="Implemento activo (en la mano)" onClick={() => toggleImpl(im.n)}>
+                      {active ? "Activo" : "Inactivo"}
+                    </button>
+                    <b className="impl-name">{im.n}</b>
+                    <select value={im.kind} disabled={!canEditExtras} title="Cómo se usa su efecto" onChange={(e) => setImpl(i, { kind: e.target.value as ImplementKind })}>
+                      {(Object.keys(IMPLEMENT_KIND_LABEL) as ImplementKind[]).map((k) => (
+                        <option key={k} value={k}>
+                          {IMPLEMENT_KIND_LABEL[k]}
+                        </option>
+                      ))}
+                    </select>
+                    {im.kind === "passive" ? (
+                      <span className="muted small">Siempre activa</span>
+                    ) : (
+                      <button className="btn small-btn primary" disabled={!canEdit} onClick={() => useImpl(im.n, im.kind, im.note)}>
+                        Usar
+                      </button>
+                    )}
+                    {canEditExtras && (
+                      <button className="row-x" title="Quitar implemento" onClick={() => setPrefs((p) => ({ ...p, implements: (p.implements ?? []).filter((_, j) => j !== i) }))}>
+                        ✕
+                      </button>
+                    )}
+                  </div>
+                  <textarea
+                    className="feat-notes"
+                    placeholder={canEditExtras ? "Qué hace su efecto (se muestra al usarlo)…" : "Sin notas"}
+                    defaultValue={im.note}
+                    readOnly={!canEditExtras}
+                    onBlur={(e) => setImpl(i, { note: e.target.value.trim() || undefined })}
+                  />
+                </div>
+              );
+            })}
+            {canEditExtras && (
+              <form
+                className="cb-row"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const v = newImpl.trim();
+                  if (!v) return;
+                  const known = IMPLEMENTS.find((x) => x.n.toLowerCase() === v.toLowerCase());
+                  setPrefs((p) => ({ ...p, implements: [...(p.implements ?? []), { n: known?.n ?? v, kind: known?.kind ?? "a1", note: known?.desc }] }));
+                  setNewImpl("");
+                }}
+              >
+                <input className="sm2" list="pf2-implements" placeholder="Nuevo implemento…" value={newImpl} onChange={(e) => setNewImpl(e.target.value)} />
+                <datalist id="pf2-implements">
+                  {IMPLEMENTS.map((x) => (
+                    <option key={x.n} value={x.n} />
+                  ))}
+                </datalist>
+                <button className="btn small-btn">+</button>
+                <ColorPick k="occult" />
+              </form>
             )}
           </>
         );
@@ -655,21 +749,42 @@ export function ClassBar({ character: c, state, extras, canEdit, canEditExtras, 
     }
   };
 
+  const current = shown.find((b) => b.id === openPanel);
   return (
     <section className="class-bar">
-      <div className="cb-buttons">
+      <div className="cb-title">Rasgos de clase</div>
+      <div className={`cb-buttons ${shown.length === 1 ? "single" : ""}`}>
         {shown.map((b) => (
           <button
             key={b.id}
-            className={`cb-btn ${b.on ? "on" : ""} ${open === b.id ? "open" : ""} ${b.glow ? "glow" : ""}`}
-            title={b.title}
+            className={`cb-btn ${b.on ? "on" : ""} ${openPanel === b.id ? "open" : ""} ${b.glow ? "glow" : ""}`}
+            title={b.title ?? "Abrir el panel"}
             onClick={() => setOpen((o) => (o === b.id ? null : b.id))}
           >
-            {b.label}
+            <span className="cb-icon" aria-hidden>
+              {b.icon}
+            </span>
+            <span className="cb-text">
+              <b>{b.label}</b>
+              {b.sub && <small>{b.sub}</small>}
+            </span>
+            <span className="cb-caret" aria-hidden>
+              {openPanel === b.id ? "▴" : "▾"}
+            </span>
           </button>
         ))}
       </div>
-      {open && <div className="cb-panel">{panel()}</div>}
+      {current && (
+        <div className="cb-panel">
+          <div className="cb-panel-head">
+            <span aria-hidden>{current.icon}</span> {current.label}
+            <button className="link-btn" onClick={() => setOpen(null)}>
+              Cerrar
+            </button>
+          </div>
+          {panel()}
+        </div>
+      )}
     </section>
   );
 }

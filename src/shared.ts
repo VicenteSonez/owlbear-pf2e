@@ -26,7 +26,18 @@ export interface NpcAttack {
   // Arma de Destreza (sutil o a distancia): la penaliza Torpe; las de Fuerza, Débil
   dex?: boolean;
   agile?: boolean;
+  // Arrojadiza a distancia: el daño suma Fuerza, así que la penaliza Débil
+  thrown?: boolean;
+  // Daño persistente del golpe (crit: solo con crítico)
+  pers?: PersistentSpec;
   fx?: AttackFx | "none";
+}
+
+// Daño persistente que deja un golpe: fórmula, tipo y si solo aparece con un crítico
+export interface PersistentSpec {
+  f: string;
+  ty: string;
+  crit?: boolean;
 }
 
 export type SpellKind = "atk" | "save" | "fx";
@@ -66,8 +77,12 @@ export interface TokenData {
   baseAc?: number;
   acAdj?: number;
   cond?: Conditions;
-  // Oculta las estadísticas del PNJ a los jugadores
+  // Nombre que eligió el GM (si no, el del token)
+  nick?: string;
+  // Oculta los números del PNJ a los jugadores (ven la barra sin números y los estados)
   hidden?: boolean;
+  // Oculta todo: ni barra ni estados
+  veil?: boolean;
   level?: number;
   // Número para distinguir criaturas iguales ("Goblin 2")
   num?: number;
@@ -89,6 +104,7 @@ export interface TokenData {
 
 export interface NpcState {
   name: string;
+  nick?: string;
   hp: number;
   maxHp: number;
   temp: number;
@@ -96,6 +112,7 @@ export interface NpcState {
   acAdj: number;
   cond: Conditions;
   hidden: boolean;
+  veil?: boolean;
   level: number;
   num?: number;
   per?: number;
@@ -114,6 +131,7 @@ export function npcState(d: TokenData): NpcState {
   const baseAc = d.baseAc ?? d.ac ?? 10;
   return {
     name: d.name,
+    nick: d.nick,
     hp: d.hp ?? 0,
     maxHp: d.maxHp ?? 1,
     temp: d.temp ?? 0,
@@ -121,6 +139,7 @@ export function npcState(d: TokenData): NpcState {
     acAdj: d.acAdj ?? (d.ac !== undefined && d.baseAc !== undefined ? d.ac - d.baseAc : 0),
     cond: d.cond ?? {},
     hidden: !!d.hidden,
+    veil: d.veil || undefined,
     level: d.level ?? 0,
     num: d.num,
     per: d.per,
@@ -136,8 +155,29 @@ export function npcState(d: TokenData): NpcState {
   };
 }
 
-// Nombre con su número: "Goblin 2"
-export const npcLabel = (n: { name: string; num?: number }) => (n.num ? `${n.name} ${n.num}` : n.name);
+// Nombre con su número: "Goblin 2". El nombre elegido por el GM manda sobre el del token.
+export const npcLabel = (n: { name: string; num?: number; nick?: string }) => {
+  const base = n.nick?.trim() || n.name;
+  return n.num ? `${base} ${n.num}` : base;
+};
+
+// Lo que ven los jugadores de un PNJ: "full" (números), "status" (barra sin números y
+// estados) o "none" (nada)
+export const npcPlayerView = (n: { hidden?: boolean; veil?: boolean }): "full" | "status" | "none" =>
+  n.veil ? "none" : n.hidden ? "status" : "full";
+
+export const PLAYER_VIEW_LABEL = { full: "Jugadores ven sus números", status: "Jugadores ven barra y estados", none: "Oculto a jugadores" } as const;
+
+// Estado de salud en palabras, para quien no ve los números
+export function hpDescriptor(hp: number, max: number): string {
+  if (hp <= 0) return "Caído";
+  const r = max > 0 ? hp / max : 0;
+  if (r >= 1) return "Ileso";
+  if (r > 0.75) return "Rasguños";
+  if (r > 0.5) return "Herido";
+  if (r > 0.25) return "Malherido";
+  return "Al borde";
+}
 
 export interface VitalState {
   hp: number;
@@ -160,7 +200,10 @@ export interface RollEntry {
   playerName: string;
   playerColor: string;
   charName?: string;
+  // Texto pequeño de arriba (quién hizo qué); si hay título, el nombre va en grande en "title"
   label: string;
+  // Nombre de la habilidad, conjuro o tirada, en grande en la tarjeta
+  title?: string;
   formula: string;
   detail: string;
   total: number;
@@ -189,6 +232,27 @@ export interface RollEntry {
 export interface ToastItem {
   entry: RollEntry;
   until: number;
+}
+
+export const TOAST_WIDTH = 320;
+
+// Alto de una tarjeta según su texto. Lo usan la ventana de tarjetas (para dibujarla) y el
+// script de fondo (para dimensionar la ventana): así el texto no se corta y la ventana no
+// tapa más mapa del necesario.
+export function toastCardHeight(e: RollEntry): number {
+  const note = e.kind === "note";
+  const big = e.title ?? e.label;
+  const small = e.title ? e.label : "";
+  // Ancho útil: la tarjeta menos el relleno y, si hay total, la columna del número
+  const textW = TOAST_WIDTH - 40 - (note ? 0 : 70);
+  const lines = (text: string, px: number, max: number) => (text ? Math.min(max, Math.ceil((text.length * px) / textW)) : 0);
+  const target = e.targetName ? ` → ${e.targetName}` : "";
+  const detail = note ? e.detail : e.total === null || Number.isNaN(e.total) ? "" : `${e.formula}: ${e.detail}${e.notes ? ` · ${e.notes}` : ""}`;
+  let h = 16 + 15; // relleno + cabecera
+  h += lines(small, 6.2, 2) * 15;
+  h += Math.max(1, lines(big + target, 9.4, 3)) * 21;
+  h += lines(detail, 6, note ? 3 : 2) * 14;
+  return Math.max(76, Math.round(h));
 }
 
 export const clamp = (n: number, min: number, max: number) => Math.min(max, Math.max(min, n));

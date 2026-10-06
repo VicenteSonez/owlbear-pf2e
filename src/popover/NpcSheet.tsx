@@ -7,6 +7,7 @@ import { TARGET_COLORS } from "../live";
 import { autoFlat } from "../autoRoll";
 import {
   DEGREE_LABEL,
+  addPersistent,
   autoIwr,
   checkAdjust,
   levelDc,
@@ -15,7 +16,10 @@ import {
   type Degree,
   type IwrPick,
 } from "../rules";
-import { SAVE_LABEL, newId, npcLabel, type NpcAttack, type NpcSpell, type NpcState, type SaveKey, type SpellKind } from "../shared";
+import { PLAYER_VIEW_LABEL, SAVE_LABEL, newId, npcLabel, npcPlayerView, type NpcAttack, type NpcSpell, type NpcState, type PersistentSpec, type SaveKey, type SpellKind } from "../shared";
+import { live } from "../live";
+import { inOwlbear, renameToken } from "../obr";
+import { parseFormula } from "../dice";
 import { ATTACK_FX, MAGIC_DESIGNS, type AttackFx, type MagicDesign } from "../fx";
 import { dealDamage, readTarget, type TargetInfo } from "../damage";
 import { useActions } from "./ctx";
@@ -41,10 +45,21 @@ interface LastHit {
   dmg?: string;
   ty?: string;
   melee: boolean;
+  thrown?: boolean;
+  pers?: PersistentSpec;
   degree: Degree;
   target: TargetInfo;
   spell?: boolean;
 }
+
+const validFormula = (f: string) => {
+  try {
+    parseFormula(f);
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 const parseMod = (t: string) => {
   const n = parseInt(t.replace(/[^\d-]/g, ""), 10);
@@ -53,10 +68,12 @@ const parseMod = (t: string) => {
 
 export function NpcSheet({ tokenId, itemName, state: n, states, onPatch }: Props) {
   const { roll, notify, publish, playFx, meId } = useActions();
-  const name = npcLabel({ name: itemName || n.name, num: n.num });
+  const name = npcLabel({ name: itemName || n.name, num: n.num, nick: n.nick });
   const [last, setLast] = useState<LastHit | null>(null);
   const [pick, setPick] = useState<IwrPick | null>(null);
   const [block, setBlock] = useState(false);
+  // Aplicar también el daño persistente del golpe
+  const [withPers, setWithPers] = useState(true);
   const [editAtk, setEditAtk] = useState(false);
   const [editSp, setEditSp] = useState(false);
   const [saveFor, setSaveFor] = useState<NpcSpell | null>(null);
@@ -103,14 +120,15 @@ export function NpcSheet({ tokenId, itemName, state: n, states, onPatch }: Props
         cond: withBuff(x.cond, { id: "taunt-og", n: "Desprevenido (Provocar)", ty: "circumstance", ac: -2, icon: "off-guard", until: { key: `npc:${tokenId}`, at: "start" } }),
       }));
     }
-    setLast({ label: a.n || "Ataque", dmg: a.dmg, ty: a.ty, melee: a.melee, degree: r.degree, target: tgt });
+    setLast({ label: a.n || "Ataque", dmg: a.dmg, ty: a.ty, melee: a.melee, thrown: a.thrown, pers: a.pers, degree: r.degree, target: tgt });
     setPick(null);
     setBlock(false);
+    setWithPers(true);
   };
 
   const rollDamage = async (crit: boolean) => {
     if (!last?.dmg) return;
-    const pen = last.spell ? { total: 0, applied: [] } : checkAdjust(n.cond, { kind: "damage", melee: last.melee });
+    const pen = last.spell ? { total: 0, applied: [] } : checkAdjust(n.cond, { kind: "damage", melee: last.melee, str: last.thrown });
     const r = await roll(
       {
         label: `${name}: ${last.label} (${crit ? "crítico" : "daño"})`,
@@ -125,9 +143,16 @@ export function NpcSheet({ tokenId, itemName, state: n, states, onPatch }: Props
     );
     if (!r) return;
     const out = await dealDamage(last.target.ref, r.total, { type: last.ty, pick: pick ?? autoIwr(last.target.iwr, last.ty ?? ""), block });
+    // Daño persistente del golpe (el de "solo crítico" requiere crítico; con crítico se duplica)
+    const pers = last.pers && withPers && validFormula(last.pers.f) && (!last.pers.crit || crit) ? last.pers : undefined;
+    if (pers && last.target.ref.kind === "pc") {
+      const p = { id: newId(), formula: pers.f, type: pers.ty, crit: crit || undefined };
+      await live.patch(last.target.ref.id, (s) => ({ ...s, cond: { ...s.cond, persistent: addPersistent(s.cond.persistent, p) } }));
+    }
     await notify({
-      label: `${last.target.name} recibe ${out.total} de daño`,
-      detail: [last.ty, out.notes].filter(Boolean).join(" · "),
+      label: `${name} → ${last.target.name}`,
+      title: `${out.total} de daño`,
+      detail: [last.ty, out.notes, pers ? `+ ${pers.f}${crit ? " ×2" : ""} persistente ${pers.ty}`.trim() : ""].filter(Boolean).join(" · "),
       tag: crit ? "Crítico" : "Daño",
       charName: name,
       secret,
@@ -142,13 +167,13 @@ export function NpcSheet({ tokenId, itemName, state: n, states, onPatch }: Props
       const flat = autoFlat({ playerId: meId, playerName: "GM", playerColor: "#e8622c" }, name, `${sp.n}: prueba de Estupefacto`, 5 + stup);
       await publish({ ...flat, secret: secret || undefined });
       if (flat.degree !== "success") {
-        await notify({ label: `${name} pierde ${sp.n}`, detail: `Estupefacto ${stup}: falló la prueba plana CD ${5 + stup}`, tag: "Conjuro perdido", charName: name, secret });
+        await notify({ label: "Pierde el conjuro:", title: sp.n, detail: `Estupefacto ${stup}: falló la prueba plana CD ${5 + stup}`, tag: "Conjuro perdido", charName: name, secret });
         return;
       }
     }
     const detail =
       sp.kind === "save" ? `Salvación de ${SAVE_LABEL[sp.save ?? "reflex"]}${sp.basic ? " básica" : ""}` : sp.kind === "atk" ? "Ataque de conjuro" : "Efecto";
-    await notify({ label: `${name} lanza ${sp.n}`, detail, tag: "Conjuro", charName: name, secret });
+    await notify({ label: "Lanza", title: sp.n, detail, tag: "Conjuro", charName: name, secret });
     playFx({ kind: sp.fx ?? "arcane", from: tokenId });
     if (sp.kind === "atk" && n.target) {
       const tgt = await readTarget({ kind: "pc", id: n.target.slice(3) });
@@ -181,6 +206,35 @@ export function NpcSheet({ tokenId, itemName, state: n, states, onPatch }: Props
     <div className="npc-sheet">
       <h3>PNJ</h3>
       <div className="te-row wrap">
+        <label className="te-field wide" title="Nombre que ven todos (también cambia el nombre del token en Owlbear)">
+          <span>Nombre</span>
+          <input
+            key={n.nick ?? itemName}
+            defaultValue={n.nick || itemName || n.name}
+            onBlur={(e) => {
+              const v = e.target.value.trim();
+              if (v === (n.nick || itemName || n.name)) return;
+              if (inOwlbear) renameToken(tokenId, v);
+            }}
+            onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+          />
+        </label>
+        <label className="te-field" title="Qué ven los jugadores sobre el token y en el combate">
+          <span>Jugadores</span>
+          <select
+            value={npcPlayerView(n)}
+            onChange={(e) => {
+              const v = e.target.value as keyof typeof PLAYER_VIEW_LABEL;
+              onPatch((x) => ({ ...x, hidden: v !== "full", veil: v === "none" || undefined }));
+            }}
+          >
+            <option value="full">Ven todo (PG y CA)</option>
+            <option value="status">Barra y estados, sin números</option>
+            <option value="none">No ven nada</option>
+          </select>
+        </label>
+      </div>
+      <div className="te-row wrap">
         <NumInput label="Nivel" value={n.level} title="Para la CD estándar y Drenado" onCommit={(v) => onPatch((x) => ({ ...x, level: Math.max(-1, Math.min(25, v)) }))} />
         <NumInput label="Nº" value={n.num ?? 0} title="Número para distinguir criaturas iguales (0 = sin número)" onCommit={(v) => onPatch((x) => ({ ...x, num: v > 0 ? v : undefined }))} />
         <NumInput label="PG máx" value={n.maxHp} onCommit={(v) => onPatch((x) => ({ ...x, maxHp: Math.max(1, v), hp: Math.min(x.hp, Math.max(1, v)) }))} />
@@ -188,10 +242,6 @@ export function NpcSheet({ tokenId, itemName, state: n, states, onPatch }: Props
         <span className="npc-dc" title="CD estándar por nivel">
           CD nv. <b>{levelDc(Math.max(0, n.level))}</b>
         </span>
-        <label className="te-check">
-          <input type="checkbox" checked={n.hidden} onChange={(e) => onPatch((x) => ({ ...x, hidden: e.target.checked }))} />
-          Ocultar a jugadores
-        </label>
       </div>
       <div className="te-row wrap">
         <NumInput label="Percepción" value={n.per ?? 0} onCommit={(v) => onPatch((x) => ({ ...x, per: v }))} />
@@ -220,7 +270,15 @@ export function NpcSheet({ tokenId, itemName, state: n, states, onPatch }: Props
 
       <h3>Objetivo</h3>
       <div className="te-row wrap">
-        <select className="npc-target" value={n.target ?? ""} onChange={(e) => onPatch((x) => ({ ...x, target: e.target.value || undefined }))}>
+        <select
+          className="npc-target"
+          value={n.target ?? ""}
+          onChange={(e) => {
+            // El valor se lee ya: el parche corre después y React habrá devuelto el select a su valor
+            const target = e.target.value || undefined;
+            onPatch((x) => ({ ...x, target }));
+          }}
+        >
           <option value="">— Sin objetivo —</option>
           {Object.values(states)
             .sort((a, b) => a.name.localeCompare(b.name))
@@ -262,6 +320,29 @@ export function NpcSheet({ tokenId, itemName, state: n, states, onPatch }: Props
             <button className={`chip ${a.agile ? "on" : ""}`} onClick={() => setAttack(a.id, { agile: !a.agile })}>
               Ágil
             </button>
+            {!a.melee && (
+              <button className={`chip ${a.thrown ? "on" : ""}`} title="Arrojadiza: el daño suma Fuerza (lo penaliza Débil)" onClick={() => setAttack(a.id, { thrown: !a.thrown || undefined })}>
+                Arrojadiza
+              </button>
+            )}
+            <input
+              className="md"
+              placeholder="Persist."
+              title="Daño persistente del golpe (1d6)"
+              defaultValue={a.pers?.f}
+              onBlur={(e) => {
+                const f = e.target.value.trim();
+                setAttack(a.id, { pers: f ? { ty: "", ...a.pers, f } : undefined });
+              }}
+            />
+            {a.pers && (
+              <>
+                <input className="md" list="pf2-damage-types" placeholder="Tipo pers." defaultValue={a.pers.ty} onBlur={(e) => setAttack(a.id, { pers: { ...a.pers!, ty: e.target.value.trim() } })} />
+                <button className={`chip ${a.pers.crit ? "on" : ""}`} title="El persistente solo aparece con un crítico" onClick={() => setAttack(a.id, { pers: { ...a.pers!, crit: a.pers!.crit ? undefined : true } })}>
+                  Solo crítico
+                </button>
+              </>
+            )}
             <select className="fx-select" value={a.fx ?? (a.melee ? "slash" : "arrow")} onChange={(e) => setAttack(a.id, { fx: e.target.value as AttackFx | "none" })}>
               <option value="none">✦ Sin efecto</option>
               {ATTACK_FX.map((f) => (
@@ -279,8 +360,9 @@ export function NpcSheet({ tokenId, itemName, state: n, states, onPatch }: Props
             <div className="weapon-head">
               <b>{a.n || "Ataque"}</b>
               <span className="muted small">
-                {a.dmg} {a.ty} · {a.melee ? "c. a c." : "distancia"} · {a.dex ? "Des" : "Fue"}
+                {a.dmg} {a.ty} · {a.melee ? "c. a c." : a.thrown ? "arrojadiza" : "distancia"} · {a.dex ? "Des" : "Fue"}
                 {a.agile ? " · ágil" : ""}
+                {a.pers ? ` · ${a.pers.f} persist. ${a.pers.ty}${a.pers.crit ? " (crítico)" : ""}` : ""}
               </span>
             </div>
             <div className="weapon-btns">
@@ -318,6 +400,13 @@ export function NpcSheet({ tokenId, itemName, state: n, states, onPatch }: Props
                 block={block}
                 onBlock={setBlock}
               />
+              {last.pers && (
+                <label className="te-check" title="Se agrega al objetivo (del mismo tipo queda el mayor)">
+                  <input type="checkbox" checked={withPers} onChange={(e) => setWithPers(e.target.checked)} />
+                  Persistente {last.pers.f} {last.pers.ty}
+                  {last.pers.crit ? " (solo con crítico)" : ""} · con crítico ×2
+                </label>
+              )}
               <div className="te-row">
                 <button className="btn danger" onClick={() => rollDamage(last.degree === "crit-success")}>
                   {last.degree === "crit-success" ? "Daño crítico (×2)" : "Tirar daño"} {last.dmg}

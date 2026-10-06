@@ -35,6 +35,8 @@ export interface ClassState {
   traced?: { k: string; r: number }[];
   aura?: boolean;
   thralls?: { tok: string; ch?: boolean }[];
+  // Implementos del taumaturgo que tiene activos (en la mano)
+  impl?: string[];
   boost?: boolean;
   // Desprevenido por su propio fallo crítico (Explotar vulnerabilidad)
   ogSelf?: boolean;
@@ -82,6 +84,7 @@ export interface Features {
   kineticAura: boolean;
   alchemist: boolean;
   monk: boolean;
+  thaumaturge: boolean;
 }
 
 const norm = (s: string) => s.toLowerCase().replace(/[’']/g, "'").trim();
@@ -164,6 +167,7 @@ export function featuresOf(c: Character): Features {
     kineticAura: has("Kinetic Aura") || /kineticist/.test(cls),
     alchemist: /alchemist/.test(cls),
     monk: /monk/.test(cls),
+    thaumaturge: /thaumaturge/.test(cls) || has("First Implement and Esoterica", "Implement's Empowerment", "Thaumaturge Dedication"),
   };
 }
 
@@ -209,6 +213,28 @@ export const slingerDamage = (kind: SlingerKind, legend: boolean): string | null
 
 // Daño extra de Furia: 2 (1 con armas ágiles) salvo que el jugador lo cambie según su instinto
 export const rageDamage = (agile: boolean) => (agile ? 1 : 2);
+
+// Implementos del taumaturgo y cómo se usa su efecto principal (el jugador lo puede cambiar)
+export type ImplementKind = "a1" | "a2" | "a3" | "reaction" | "free" | "passive";
+export const IMPLEMENT_KIND_LABEL: Record<ImplementKind, string> = {
+  a1: "Acción (1)",
+  a2: "Actividad (2)",
+  a3: "Actividad (3)",
+  reaction: "Reacción",
+  free: "Acción gratuita",
+  passive: "Pasiva",
+};
+export const IMPLEMENTS: { n: string; kind: ImplementKind; desc: string }[] = [
+  { n: "Amulet", kind: "reaction", desc: "Amulet's Abeyance: resistencia contra el daño de un enemigo a un aliado." },
+  { n: "Bell", kind: "reaction", desc: "Ring Bell: el enemigo hace una salvación o sufre un efecto." },
+  { n: "Chalice", kind: "a1", desc: "Drink from the Chalice: PG temporales o curación." },
+  { n: "Lantern", kind: "passive", desc: "Revela lo oculto y da bonos a Buscar." },
+  { n: "Mirror", kind: "a1", desc: "Mirror's Reflection: crea un reflejo en otra casilla." },
+  { n: "Regalia", kind: "passive", desc: "Aura: bono a Diplomacia, Intimidación y contra el miedo de los aliados." },
+  { n: "Tome", kind: "passive", desc: "Recordar conocimiento mejorado y entrenamiento en habilidades." },
+  { n: "Wand", kind: "a2", desc: "Fling Magic: daño a distancia con salvación." },
+  { n: "Weapon", kind: "reaction", desc: "Implement's Interruption: Golpe de reacción." },
+];
 
 export const HUNTER_EDGE_LABEL: Record<HunterEdge, string> = {
   flurry: "Ráfaga",

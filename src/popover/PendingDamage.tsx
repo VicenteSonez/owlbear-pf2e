@@ -1,6 +1,8 @@
 // Daño que los jugadores hicieron a PNJ: el GM lo autoriza (con resistencias) o lo descarta
 import { useEffect, useState } from "react";
-import { autoIwr, type IwrPick } from "../rules";
+import { addPersistent, autoIwr, type IwrPick } from "../rules";
+import { newId } from "../shared";
+import { patchNpc } from "../obr";
 import { damageReqs, useDamageReqs, type DamageReq } from "../requests";
 import { dealDamage, healTarget, readTarget, type TargetInfo } from "../damage";
 import { useActions } from "./ctx";
@@ -11,6 +13,8 @@ function ReqRow({ r }: { r: DamageReq }) {
   const [info, setInfo] = useState<TargetInfo | null>(null);
   const [pick, setPick] = useState<IwrPick | null>(null);
   const [amt, setAmt] = useState(String(r.amt));
+  // Persistentes que se aplicarán (todos marcados al llegar)
+  const [persOn, setPersOn] = useState<boolean[]>(() => (r.pers ?? []).map(() => true));
   useEffect(() => {
     readTarget({ kind: "npc", tokenId: r.tok }).then(setInfo);
   }, [r.tok]);
@@ -26,12 +30,21 @@ function ReqRow({ r }: { r: DamageReq }) {
     if (!Number.isFinite(n)) return;
     if (r.heal) {
       await healTarget({ kind: "npc", tokenId: r.tok }, n);
-      await notify({ label: `${r.n} recupera ${n} PG`, tag: "Curación", charName: r.fromName, secret: info?.hidden });
+      await notify({ label: `${r.n} recupera`, title: `${n} PG`, detail: r.label, tag: "Curación", charName: r.fromName, secret: info?.hidden });
     } else {
       const out = await dealDamage({ kind: "npc", tokenId: r.tok }, n, { type: r.ty, pick: cur });
+      const pers = (r.pers ?? []).filter((_, i) => persOn[i]);
+      if (pers.length) {
+        await patchNpc(r.tok, (x) => {
+          let list = x.cond.persistent;
+          for (const p of pers) list = addPersistent(list, { id: newId(), formula: p.f, type: p.ty, crit: r.crit || undefined });
+          return { ...x, cond: { ...x.cond, persistent: list } };
+        });
+      }
       await notify({
-        label: `${r.n} recibe ${out.total} de daño`,
-        detail: [r.label, r.ty, out.notes].filter(Boolean).join(" · "),
+        label: `${r.n} recibe`,
+        title: `${out.total} de daño`,
+        detail: [r.label, r.ty, out.notes, ...pers.map((p) => `+ ${p.f}${r.crit ? " ×2" : ""} persistente ${p.ty}`.trim())].filter(Boolean).join(" · "),
         tag: r.crit ? "Crítico" : "Daño",
         charName: r.fromName,
         secret: info?.hidden,
@@ -59,6 +72,17 @@ function ReqRow({ r }: { r: DamageReq }) {
         </button>
       </div>
       {!r.heal && <IwrChips iwr={info?.iwr} type={r.ty} pick={cur} onPick={setPick} />}
+      {r.typed?.length ? <div className="muted small">Incluye: {r.typed.join(" · ")}</div> : null}
+      {(r.pers ?? []).map((p, i) => (
+        <label key={i} className="te-check" title="Se agrega al PNJ (del mismo tipo queda el mayor)">
+          <input type="checkbox" checked={!!persOn[i]} onChange={(e) => {
+              const on = e.target.checked;
+              setPersOn((l) => l.map((v, j) => (j === i ? on : v)));
+            }} />
+          Persistente {p.f}
+          {r.crit ? " ×2" : ""} {p.ty || "sin tipo"}
+        </label>
+      ))}
     </div>
   );
 }

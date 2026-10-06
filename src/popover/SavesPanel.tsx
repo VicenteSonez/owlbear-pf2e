@@ -41,7 +41,7 @@ export function useTargetOptions(states: Record<string, PcState>, playersOnly = 
       .map((s) => ({ k: `pc:${s.id}`, n: s.name, pc: true }));
     const npcs = tokens
       .filter((t) => t.data.kind === "npc" && (!playersOnly || (t.item.visible && !t.data.hidden)))
-      .map((t) => ({ k: `npc:${t.item.id}`, n: npcLabel({ name: t.item.name || t.data.name, num: t.data.num }), pc: false }));
+      .map((t) => ({ k: `npc:${t.item.id}`, n: npcLabel({ name: t.item.name || t.data.name, num: t.data.num, nick: t.data.nick }), pc: false }));
     return [...pcs, ...npcs];
   }, [states, tokens, playersOnly]);
 }
@@ -91,7 +91,8 @@ export function SaveRequestForm(props: {
     };
     await saveEffects.set(eff.id, eff);
     await notify({
-      label: `${eff.name}: salvación de ${SAVE_LABEL[save]}`,
+      label: `Salvación de ${SAVE_LABEL[save]}:`,
+      title: eff.name,
       detail: targets.map((t) => t.n).join(", "),
       tag: "Salvación",
       charName: props.from.name,

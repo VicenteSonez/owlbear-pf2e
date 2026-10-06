@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { DAMAGE_TYPES, autoIwr, hasIwr, resolveIwr, shieldBroken, type Iwr, type IwrPick, type ShieldState } from "../rules";
+import { DAMAGE_TYPES, autoIwr, hasIwr, iwrEntryText, resolveIwr, shieldBroken, type Iwr, type IwrEntry, type IwrPick, type ShieldState } from "../rules";
 import type { DamageOpts } from "../damage";
 
 // Lista de tipos de daño para los campos de texto (con los grupos de resistencias)
@@ -35,13 +35,13 @@ export function IwrChips(props: {
         </button>
       )}
       {(iwr?.res ?? []).map((r, i) => (
-        <button key={`r${i}`} type="button" className={`chip ${pick.res.includes(i) ? "on" : ""}`} title="Resistencia: se resta al daño" onClick={() => onPick({ ...pick, res: toggle(pick.res, i) })}>
-          Resist. {r.t} {r.v}
+        <button key={`r${i}`} type="button" className={`chip ${pick.res.includes(i) ? "on" : ""}`} title={`Resistencia${r.off ? " situacional" : ""}: se resta al daño (de varias cuenta la mayor)`} onClick={() => onPick({ ...pick, res: toggle(pick.res, i) })}>
+          Resist. {iwrEntryText(r)}
         </button>
       ))}
       {(iwr?.weak ?? []).map((w, i) => (
         <button key={`w${i}`} type="button" className={`chip warn ${pick.weak.includes(i) ? "on" : ""}`} title="Debilidad: se suma al daño total" onClick={() => onPick({ ...pick, weak: toggle(pick.weak, i) })}>
-          Debil. {w.t} {w.v}
+          Debil. {iwrEntryText(w)}
         </button>
       ))}
       {canBlock && (
@@ -146,11 +146,14 @@ export function DamageBox(props: {
   );
 }
 
-// Editor de inmunidades, resistencias y debilidades
+// Editor de inmunidades, resistencias y debilidades. Puede haber varias del mismo tipo
+// (con su origen); las situacionales no se aplican solas, se activan en cada daño.
 export function IwrEditor({ iwr, canEdit, onChange }: { iwr?: Iwr; canEdit: boolean; onChange: (next: Iwr | undefined) => void }) {
   const [kind, setKind] = useState<"imm" | "res" | "weak">("res");
   const [type, setType] = useState("");
   const [val, setVal] = useState("");
+  const [note, setNote] = useState("");
+  const [situational, setSituational] = useState(false);
   const cur: Iwr = iwr ?? {};
   const set = (next: Iwr) => onChange(next.imm?.length || next.res?.length || next.weak?.length ? next : undefined);
   const add = () => {
@@ -158,23 +161,39 @@ export function IwrEditor({ iwr, canEdit, onChange }: { iwr?: Iwr; canEdit: bool
     const v = parseInt(val, 10);
     if (!t) return;
     if (kind === "imm") set({ ...cur, imm: [...(cur.imm ?? []).filter((x) => x !== t), t] });
-    else if (Number.isFinite(v) && v > 0) set({ ...cur, [kind]: [...(cur[kind] ?? []).filter((x) => x.t !== t), { t, v }] });
-    else return;
+    else if (Number.isFinite(v) && v > 0) {
+      const entry: IwrEntry = { t, v, n: note.trim() || undefined, off: situational || undefined };
+      // Solo se reemplaza una idéntica (mismo tipo y origen)
+      set({ ...cur, [kind]: [...(cur[kind] ?? []).filter((x) => !(x.t === t && (x.n ?? "") === (entry.n ?? ""))), entry] });
+    } else return;
     setType("");
     setVal("");
+    setNote("");
+    setSituational(false);
   };
+  const toggleOff = (k: "res" | "weak", i: number) => set({ ...cur, [k]: (cur[k] ?? []).map((x, j) => (j === i ? { ...x, off: x.off ? undefined : true } : x)) });
   const entries = [
-    ...(cur.imm ?? []).map((t, i) => ({ k: "imm" as const, i, text: `Inmune: ${t}` })),
-    ...(cur.res ?? []).map((r, i) => ({ k: "res" as const, i, text: `Resistencia ${r.t} ${r.v}` })),
-    ...(cur.weak ?? []).map((w, i) => ({ k: "weak" as const, i, text: `Debilidad ${w.t} ${w.v}` })),
+    ...(cur.imm ?? []).map((t, i) => ({ k: "imm" as const, i, text: `Inmune: ${t}`, off: false })),
+    ...(cur.res ?? []).map((r, i) => ({ k: "res" as const, i, text: `Resistencia ${iwrEntryText(r)}`, off: !!r.off })),
+    ...(cur.weak ?? []).map((w, i) => ({ k: "weak" as const, i, text: `Debilidad ${iwrEntryText(w)}`, off: !!w.off })),
   ];
   return (
     <div className="iwr-editor">
       {entries.length === 0 && <p className="muted small">Sin inmunidades, resistencias ni debilidades.</p>}
       <div className="iwr-list">
         {entries.map((e) => (
-          <span key={`${e.k}${e.i}`} className={`chip on ${e.k === "weak" ? "warn" : ""}`}>
+          <span key={`${e.k}${e.i}`} className={`chip ${e.off ? "" : "on"} ${e.k === "weak" ? "warn" : ""}`}>
             {e.text}
+            {e.k !== "imm" && (
+              <button
+                className="chip-mode"
+                disabled={!canEdit}
+                title={e.off ? "Situacional: solo se aplica si la activas en el daño (clic para que se aplique sola)" : "Se aplica sola si coincide el tipo (clic para hacerla situacional)"}
+                onClick={() => toggleOff(e.k as "res" | "weak", e.i)}
+              >
+                {e.off ? "situacional" : "auto"}
+              </button>
+            )}
             {canEdit && (
               <button
                 className="chip-x"
@@ -207,10 +226,17 @@ export function IwrEditor({ iwr, canEdit, onChange }: { iwr?: Iwr; canEdit: bool
           </select>
           <input list="pf2-damage-types" placeholder="Tipo (fuego, físico…)" value={type} onChange={(e) => setType(e.target.value)} />
           {kind !== "imm" && <input className="sm" inputMode="numeric" placeholder="Valor" value={val} onChange={(e) => setVal(e.target.value.replace(/\D/g, ""))} />}
+          {kind !== "imm" && <input className="md" placeholder="Origen (opcional)" value={note} onChange={(e) => setNote(e.target.value)} />}
+          {kind !== "imm" && (
+            <label className="te-check" title="No se aplica sola: la activas en cada daño">
+              <input type="checkbox" checked={situational} onChange={(e) => setSituational(e.target.checked)} /> Situacional
+            </label>
+          )}
           <button className="btn">Agregar</button>
           <DamageTypeList />
         </form>
       )}
+      {(cur.res ?? []).length > 1 && <p className="muted small">De varias resistencias activas contra un mismo daño solo cuenta la mayor.</p>}
     </div>
   );
 }

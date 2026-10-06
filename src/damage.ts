@@ -66,7 +66,7 @@ export async function readTarget(t: TargetRef): Promise<TargetInfo | null> {
   const n = npcState(d);
   return {
     ref: t,
-    name: npcLabel({ name: item.name || n.name, num: n.num }),
+    name: npcLabel({ name: item.name || n.name, num: n.num, nick: n.nick }),
     ac: effectiveAc(n.baseAc, n.acAdj, n.cond, n.shield).ac,
     iwr: n.iwr,
     shield: n.shield,

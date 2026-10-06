@@ -11,7 +11,8 @@ export function sidesFor(c: Character): { id: Side; label: string; icon: React.R
   return [
     { id: "feats" as const, label: "Dotes y rasgos", icon: <IconFeats /> },
     { id: "inventory" as const, label: "Inventario", icon: <IconBag /> },
-    ...(c.casters.length || f.kinetic || f.runes ? [{ id: "magic" as const, label: "Magia", icon: <IconBook /> }] : []),
+    // Siempre: aunque no lance conjuros puede tener pergaminos o conjuros innatos de objetos
+    { id: "magic" as const, label: "Magia", icon: <IconBook /> },
     ...(c.formulas?.length || alch?.alchemist || alch?.advanced || alch?.quick
       ? [{ id: "recipes" as const, label: "Recetas", icon: <IconFlask /> }]
       : []),

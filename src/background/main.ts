@@ -17,10 +17,15 @@ import {
   OVERLAY_PREFIX,
   TOAST_KEY,
   TOAST_POPOVER,
+  TOAST_WIDTH,
   hpColor,
+  hpDescriptor,
+  npcPlayerView,
+  toastCardHeight,
   npcState,
   visibleEntry,
   type RollEntry,
+  type ToastItem,
   type TokenData,
 } from "../shared";
 
@@ -129,8 +134,6 @@ async function setupContextMenus() {
 // ---------- Tiradas compartidas: registro + tarjetas abajo a la derecha ----------
 
 const toastUrl = pageUrl("toast.html");
-const TOAST_WIDTH = 300;
-const TOAST_CARD = 76;
 const TOAST_GAP = 8;
 const TOAST_CLEAR = 22;
 const TOAST_PAD = 4;
@@ -141,8 +144,8 @@ const TOAST_BOTTOM = 70;
 let toastOpen = false;
 let toastQueue: Promise<void> = Promise.resolve();
 
-const toastHeight = (n: number) =>
-  n * TOAST_CARD + (n - 1) * TOAST_GAP + (n > 1 ? TOAST_CLEAR + TOAST_GAP : 0) + TOAST_PAD;
+const toastHeight = (list: ToastItem[]) =>
+  list.reduce((h, t) => h + toastCardHeight(t.entry), 0) + (list.length - 1) * TOAST_GAP + (list.length > 1 ? TOAST_CLEAR + TOAST_GAP : 0) + TOAST_PAD;
 
 const liveToasts = () => store.toasts().filter((t) => t.until > Date.now());
 
@@ -160,7 +163,7 @@ function syncToasts() {
         }
         return;
       }
-      const height = toastHeight(list.length);
+      const height = toastHeight(list);
       if (toastOpen) {
         await OBR.popover.setHeight(TOAST_POPOVER, height);
         return;
@@ -220,7 +223,8 @@ interface TokenView {
   acChanged: boolean;
   dead: boolean;
   icons: { icon: string; value?: number }[];
-  hiddenNpc: boolean;
+  // Qué ven los jugadores: números, solo barra y estados, o nada
+  view: "full" | "status" | "none";
   num?: number;
 }
 
@@ -233,7 +237,6 @@ function classMarks(tokenId: string): TokenView["icons"] {
     if (k.prey === tokenId) out.push({ icon: "prey" });
     if (k.taunt === tokenId) out.push({ icon: "taunt" });
     if (k.exploit?.tok === tokenId) out.push({ icon: "exploit" });
-    if (k.thralls?.some((t) => t.tok === tokenId)) out.push({ icon: "thrall" });
   }
   return out;
 }
@@ -263,7 +266,7 @@ function viewFor(item: Item, d: TokenData): TokenView | null {
       acChanged: ac !== s.baseAc,
       dead: hpS.dying >= DEATH_DYING,
       icons,
-      hiddenNpc: false,
+      view: "full",
     };
   }
   const n = npcState(d);
@@ -280,7 +283,7 @@ function viewFor(item: Item, d: TokenData): TokenView | null {
     acChanged: ac !== n.baseAc,
     dead: false,
     icons,
-    hiddenNpc: n.hidden,
+    view: npcPlayerView(n),
     num: n.num,
   };
 }
@@ -295,7 +298,7 @@ const partId = (tokenId: string, part: string) => `${OVERLAY_PREFIX}-${part}-${t
 
 function shouldShow(item: Item, v: TokenView) {
   if (role === "GM") return true;
-  return item.visible && !v.hiddenNpc;
+  return item.visible && v.view !== "none";
 }
 
 async function buildOverlay(item: Item, v: TokenView): Promise<Item[]> {
@@ -358,7 +361,9 @@ async function buildOverlay(item: Item, v: TokenView): Promise<Item[]> {
         .build(),
     );
   }
-  const hpText = v.dead ? "MUERTO" : `${v.hp}/${v.maxHp}${v.temp ? ` +${v.temp}` : ""}`;
+  // Sin números para los jugadores si el GM los oculta: solo cómo está
+  const numbers = role === "GM" || v.view === "full";
+  const hpText = v.dead ? "MUERTO" : numbers ? `${v.hp}/${v.maxHp}${v.temp ? ` +${v.temp}` : ""}` : hpDescriptor(v.hp, v.maxHp);
   out.push(
     common(buildText().id(partId(item.id, "text")))
       .textType("PLAIN")
@@ -382,7 +387,7 @@ async function buildOverlay(item: Item, v: TokenView): Promise<Item[]> {
   // Hexágono con la CA a la izquierda de la barra
   const s = h * 1.9;
   const acCenter = { x: x - s * 0.35, y: y + h / 2 };
-  out.push(
+  if (numbers) out.push(
     common(buildShape().id(partId(item.id, "ac")))
       .shapeType("HEXAGON")
       .width(s)
@@ -549,6 +554,7 @@ async function syncOverlays(items: Item[]) {
     if (toAdd.length) await OBR.scene.local.addItems(toAdd);
     await syncTurnRing();
     await syncTargets(items);
+    await syncThralls(items);
   } catch (err) {
     console.error("[PF2e] Error dibujando barras", err);
   } finally {
@@ -639,6 +645,90 @@ async function syncTargets(items: Item[]) {
       : [ring("a", base, dpi * 0.035), ring("b", base * 0.62, dpi * 0.03), ring("c", base * 0.16, 0, true)];
     toAdd.push(...built);
     targetsDrawn.set(t.key, { sig, ids: built.map((x) => x.id) });
+  }
+  if (toDelete.length) {
+    const existing = new Set((await OBR.scene.local.getItems()).map((i) => i.id));
+    const del = toDelete.filter((id) => existing.has(id));
+    if (del.length) await OBR.scene.local.deleteItems(del);
+  }
+  if (toAdd.length) await OBR.scene.local.addItems(toAdd);
+}
+
+// ---------- Siervos del nigromante: anillo punteado y calavera de su color ----------
+
+const thrallsDrawn = new Map<string, { sig: string; ids: string[] }>();
+
+async function syncThralls(items: Item[]) {
+  const wanted = new Map<string, { color: string; tokenId: string; n: number }>();
+  for (const s of Object.values(live.all())) {
+    (s.cls?.thralls ?? []).forEach((t, i) => {
+      const item = items.find((x) => x.id === t.tok);
+      if (item && (item.visible || role === "GM")) wanted.set(`${s.id}-${t.tok}`, { color: pcColor(s), tokenId: t.tok, n: i + 1 });
+    });
+  }
+  const toDelete: string[] = [];
+  const toAdd: Item[] = [];
+  for (const [k, r] of [...thrallsDrawn]) {
+    if (!wanted.has(k)) {
+      toDelete.push(...r.ids);
+      thrallsDrawn.delete(k);
+    }
+  }
+  for (const [k, t] of wanted) {
+    const item = items.find((i) => i.id === t.tokenId)!;
+    const sig = JSON.stringify([t.color, item.scale, item.visible, dpi]);
+    const prev = thrallsDrawn.get(k);
+    if (prev?.sig === sig) continue;
+    if (prev) toDelete.push(...prev.ids);
+    const b = await OBR.scene.items.getItemBounds([item.id]);
+    const size = Math.max(b.width, b.height);
+    const attach = <T extends ReturnType<typeof buildShape> | ReturnType<typeof buildImage>>(x: T) =>
+      x
+        .attachedTo(item.id)
+        .layer("ATTACHMENT")
+        .locked(true)
+        .disableHit(true)
+        .visible(item.visible)
+        .disableAttachmentBehavior(["ROTATION", "SCALE", "LOCKED", "COPY"]) as T;
+    const badge = Math.max(dpi * 0.32, size * 0.3);
+    const corner = { x: b.min.x + badge * 0.35, y: b.min.y + badge * 0.35 };
+    const built = [
+      attach(buildShape().id(`${OVERLAY_PREFIX}-thr-${k}-ring`))
+        .shapeType("CIRCLE")
+        .width(size * 1.08)
+        .height(size * 1.08)
+        .position(b.center)
+        .fillColor(t.color)
+        .fillOpacity(0.12)
+        .strokeColor(t.color)
+        .strokeOpacity(0.95)
+        .strokeWidth(dpi * 0.035)
+        .strokeDash([dpi * 0.09, dpi * 0.06])
+        .zIndex(3)
+        .build(),
+      attach(buildShape().id(`${OVERLAY_PREFIX}-thr-${k}-bg`))
+        .shapeType("CIRCLE")
+        .width(badge)
+        .height(badge)
+        .position(corner)
+        .fillColor("#15171c")
+        .fillOpacity(0.92)
+        .strokeColor(t.color)
+        .strokeWidth(dpi * 0.02)
+        .zIndex(4)
+        .build(),
+      attach(
+        buildImage(
+          { url: icon("cond/thrall"), mime: "image/svg+xml", width: 64, height: 64 },
+          { dpi: (64 * dpi) / (badge * 0.75), offset: { x: 32, y: 32 } },
+        ).id(`${OVERLAY_PREFIX}-thr-${k}-icon`),
+      )
+        .position(corner)
+        .zIndex(5)
+        .build(),
+    ];
+    toAdd.push(...built);
+    thrallsDrawn.set(k, { sig, ids: built.map((x) => x.id) });
   }
   if (toDelete.length) {
     const existing = new Set((await OBR.scene.local.getItems()).map((i) => i.id));
@@ -790,6 +880,7 @@ function detectNpcFx(items: Item[]) {
 async function resetOverlays() {
   rendered.clear();
   targetsDrawn.clear();
+  thrallsDrawn.clear();
   resetFx();
   ringSig = null;
   if (!(await OBR.scene.isReady())) return;
@@ -815,6 +906,7 @@ function setupOverlays() {
     if (!ready) {
       rendered.clear();
       targetsDrawn.clear();
+      thrallsDrawn.clear();
       lastItems = [];
       prevNpc = null;
       return;

@@ -8,7 +8,10 @@ import {
   DEATH_DYING,
   effectiveAc,
   effectiveMaxHp,
+  addPersistent as withPersistent,
   modsText,
+  persistentByType,
+  persistentText,
   withoutBuff,
   type ConditionDef,
   type Conditions,
@@ -47,6 +50,7 @@ function clean(c: Conditions): Conditions {
 export function EffectsPanel({ target, states, onPatchPc, onPatchNpc, onOpenSheet, onRemove, onResolvePersistent }: Props) {
   const [pFormula, setPFormula] = useState("");
   const [pType, setPType] = useState("");
+  const [pCrit, setPCrit] = useState(false);
   const [pError, setPError] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
 
@@ -57,7 +61,7 @@ export function EffectsPanel({ target, states, onPatchPc, onPatchNpc, onOpenShee
   const hpSrc = target.kind === "pc" && target.state.pet?.shared ? (live.get(target.state.pet.parent) ?? target.state) : st;
   const maxHp = effectiveMaxHp(hpSrc.maxHp, hpSrc.level, hpSrc.cond ?? {});
   const { ac, applied } = effectiveAc(st.baseAc, st.acAdj, cond, st.shield);
-  const name = target.kind === "npc" ? npcLabel({ name: target.itemName || st.name, num: target.state.num }) : st.name;
+  const name = target.kind === "npc" ? npcLabel({ name: target.itemName || st.name, num: target.state.num, nick: target.state.nick }) : st.name;
   const ref: TargetRef = target.kind === "pc" ? { kind: "pc", id: target.state.id } : { kind: "npc", tokenId: target.tokenId };
 
   // Cambia condiciones sobre el estado más reciente. Drenado sube → pierde nivel×Δ PG (solo PJ).
@@ -99,9 +103,10 @@ export function EffectsPanel({ target, states, onPatchPc, onPatchNpc, onOpenShee
       return;
     }
     setPError(null);
-    updCond((c) => ({ ...c, persistent: [...(c.persistent ?? []), { id: newId(), formula, type: pType.trim() }] }));
+    updCond((c) => ({ ...c, persistent: withPersistent(c.persistent, { id: newId(), formula, type: pType.trim(), crit: pCrit || undefined }) }));
     setPFormula("");
     setPType("");
+    setPCrit(false);
   };
 
   const pct = Math.max(0, Math.min(100, (hpSrc.hp / Math.max(1, maxHp)) * 100));
@@ -221,13 +226,14 @@ export function EffectsPanel({ target, states, onPatchPc, onPatchNpc, onOpenShee
 
       <h3>Daño persistente</h3>
       <div className="persist">
-        {(cond.persistent ?? []).map((p) => (
+        {persistentByType(cond.persistent).map(({ top: p, ids }) => (
           <div key={p.id} className="persist-item">
             <img src={iconUrl("persistent")} alt="" width={18} height={18} />
-            <b>{p.formula}</b> <span>{p.type || "sin tipo"}</span>
+            <b>{persistentText(p)}</b> <span>{p.type || "sin tipo"}</span>
+            {p.crit && <span className="badge bad">crítico</span>}
             <button
               className="link-btn"
-              onClick={() => updCond((c) => ({ ...c, persistent: (c.persistent ?? []).filter((x) => x.id !== p.id) }))}
+              onClick={() => updCond((c) => ({ ...c, persistent: (c.persistent ?? []).filter((x) => !ids.includes(x.id)) }))}
             >
               Quitar
             </button>
@@ -241,10 +247,14 @@ export function EffectsPanel({ target, states, onPatchPc, onPatchNpc, onOpenShee
           }}
         >
           <input placeholder="1d6" value={pFormula} onChange={(e) => setPFormula(e.target.value)} />
-          <input placeholder="Tipo (fuego, sangrado…)" value={pType} onChange={(e) => setPType(e.target.value)} />
+          <input placeholder="Tipo (fuego, sangrado…)" list="pf2-damage-types" value={pType} onChange={(e) => setPType(e.target.value)} />
+          <label className="te-check" title="Vino de un golpe crítico: se duplica">
+            <input type="checkbox" checked={pCrit} onChange={(e) => setPCrit(e.target.checked)} /> Crítico
+          </label>
           <button className="btn">Agregar</button>
         </form>
         {pError && <p className="error small">{pError}</p>}
+        <p className="muted small">Del mismo tipo no se suman: queda el mayor y se hace una sola prueba plana.</p>
         {(cond.persistent ?? []).length > 0 && (
           <button className="btn" onClick={() => onResolvePersistent(target)} title="Se hace solo al final de su turno cuando haya iniciativa">
             Resolver ahora: daño + prueba plana CD 15

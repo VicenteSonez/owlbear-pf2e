@@ -4,7 +4,7 @@ import type { Character } from "../pathbuilder";
 import { live, type PcState } from "../live";
 import { inOwlbear, patchNpc, unlinkToken } from "../obr";
 import { DEATH_DYING, effectiveAc, effectiveMaxHp } from "../rules";
-import { META_TOKEN, hpColor, npcLabel, npcState, type NpcState, type TokenData } from "../shared";
+import { META_TOKEN, hpColor, npcLabel, npcPlayerView, npcState, PLAYER_VIEW_LABEL, type NpcState, type TokenData } from "../shared";
 import { useSaveEffects } from "../requests";
 import { ConditionRow, CondIcon } from "./bits";
 import { EffectsPanel, type Target } from "./EffectsPanel";
@@ -29,7 +29,7 @@ async function numberNpcs(tokens: { item: Item; data: TokenData }[]) {
   const groups = new Map<string, { item: Item; data: TokenData }[]>();
   for (const t of tokens) {
     if (t.data.kind !== "npc") continue;
-    const key = (t.item.name || t.data.name).trim().toLowerCase();
+    const key = (t.data.nick || t.item.name || t.data.name).trim().toLowerCase();
     groups.set(key, [...(groups.get(key) ?? []), t]);
   }
   const updates = new Map<string, number | undefined>();
@@ -214,14 +214,14 @@ export function GmView({ states, sheets, onOpenSheet, onUpload, onResolvePersist
             return (
               <MiniCard
                 key={n.id}
-                name={npcLabel({ name: n.item.name || n.state.name, num: n.state.num })}
-                sub={`${n.state.level ? `Nivel ${n.state.level} · ` : ""}${n.state.hidden ? "Oculto a jugadores" : "Visible para jugadores"}`}
+                name={npcLabel({ name: n.item.name || n.state.name, num: n.state.num, nick: n.state.nick })}
+                sub={`${n.state.level ? `Nivel ${n.state.level} · ` : ""}${PLAYER_VIEW_LABEL[npcPlayerView(n.state)]}`}
                 hp={n.state.hp}
                 maxHp={effectiveMaxHp(n.state.maxHp, n.state.level, n.state.cond)}
                 ac={ac}
                 acChanged={ac !== n.state.baseAc}
                 cond={n.state.cond}
-                badge={n.state.hidden ? "oculto" : undefined}
+                badge={n.state.veil ? "oculto" : n.state.hidden ? "sin números" : undefined}
                 selected={sel?.kind === "npc" && sel.id === n.id}
                 onClick={() => setSel({ kind: "npc", id: n.id })}
               />

@@ -2,6 +2,7 @@ import { PARSER_VERSION, parsePathbuilder, type Character, type Weapon } from ".
 import { DEFAULT_DICE_STYLE, type DiceStyle } from "./dice";
 import type { AttackFx } from "./fx";
 import type { SlingerKind } from "./classes";
+import type { PersistentSpec } from "./shared";
 import { TOAST_KEY, type RollEntry, type ToastItem, type VitalState } from "./shared";
 
 // Todas las páginas de la extensión comparten origen, así que comparten localStorage.
@@ -26,9 +27,13 @@ export const LOG_LIMIT = 60;
 
 // Ajustes manuales de un arma (sobreviven a reimportar la hoja)
 export interface WeaponFlags {
+  // Nombre elegido por el jugador
+  name?: string;
   agile?: boolean;
   finesse?: boolean;
   ranged?: boolean;
+  thrown?: boolean;
+  pers?: PersistentSpec;
   range?: number;
   extras?: Record<string, boolean>;
   // Efecto visual del ataque ("none" = sin efecto)
@@ -47,6 +52,9 @@ export function applyWeaponFlags(w: Weapon, f: WeaponFlags | undefined): Weapon 
   if (!f) return base;
   return {
     ...base,
+    name: f.name || base.name,
+    thrown: f.thrown ?? base.thrown,
+    pers: f.pers ?? base.pers,
     agile: f.agile ?? base.agile,
     finesse: f.finesse ?? base.finesse,
     ranged: f.ranged ?? base.ranged,
@@ -69,12 +77,23 @@ function upgrade(c: Character): Character {
   }
 }
 
+// Nombre elegido por el jugador para su personaje (sobrevive a reimportar la hoja)
+const nicks = () => read<Record<string, string>>("pf2.nicks", {});
+const withNick = (c: Character, all: Record<string, string>): Character => (all[c.id] ? { ...c, name: all[c.id] } : c);
+
 export const store = {
   characters(): Character[] {
     const list = read<Character[]>("pf2.characters", []);
     const upgraded = list.map(upgrade);
     if (upgraded.some((c, i) => c !== list[i])) write("pf2.characters", upgraded);
-    return upgraded;
+    const all = nicks();
+    return upgraded.map((c) => withNick(c, all));
+  },
+  setNick(id: string, name: string | undefined) {
+    const all = nicks();
+    if (name) all[id] = name;
+    else delete all[id];
+    write("pf2.nicks", all);
   },
   saveCharacter(c: Character, raw?: unknown) {
     const list = read<Character[]>("pf2.characters", []).filter((x) => x.id !== c.id);

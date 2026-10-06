@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import type { Character } from "../pathbuilder";
 import type { PcState } from "../live";
 import { DEATH_DYING, effectiveMaxHp } from "../rules";
-import { hpColor, type NpcState } from "../shared";
+import { hpColor, npcLabel, npcPlayerView, type NpcState } from "../shared";
+import { NpcHpBar } from "./NpcStatus";
 import type { Combat, Entry } from "../combat";
 import { ConditionRow, CondIcon } from "./bits";
 import { InitPanel, type InitOption } from "./Initiative";
@@ -136,15 +137,15 @@ export function CombatView({ combat, entries, isGm, own, ownState, npcStates, al
           {visible.map((e, i) => {
             const turn = e.key === combat.current;
             const npc = e.tokenId ? npcStates[e.tokenId] : undefined;
-            const showNpcHp = isGm && npc;
-            const cond = e.pc ? e.pc.cond : isGm || (npc && !npc.hidden) ? npc?.cond : undefined;
+            // Los jugadores ven del PNJ lo que el GM deje (barra sin números y estados, por defecto)
+            const cond = e.pc ? e.pc.cond : npc && (isGm || npcPlayerView(npc) !== "none") ? npc.cond : undefined;
             return (
               <div key={e.key} className={`init-entry ${e.kind} ${turn ? "turn" : ""} ${e.init === null ? "pending" : ""}`}>
                 <span className="ie-marker">{turn ? "▶" : ""}</span>
                 {isGm ? <InitInput value={e.init} onCommit={(v) => actions.setInit(e, v)} /> : <b className="ie-init">{e.init ?? "—"}</b>}
                 <div className="ie-main">
                   <div className="ie-name">
-                    <b>{npc?.num ? `${e.name} ${npc.num}` : e.name}</b>
+                    <b>{npc ? npcLabel({ name: e.name, num: npc.num, nick: npc.nick }) : e.name}</b>
                     {e.kind === "npc" && <span className="badge">PNJ</span>}
                     {e.hidden && <span className="badge">oculto</span>}
                     {e.pc?.init?.winsTies && (
@@ -160,7 +161,7 @@ export function CombatView({ combat, entries, isGm, own, ownState, npcStates, al
                     {e.pc && e.pc.wounded > 0 && <CondIcon icon="wounded" label="Herido" value={e.pc.wounded} size={15} />}
                   </div>
                   {e.pc && <HpBar hp={e.pc.hp} max={effectiveMaxHp(e.pc.maxHp, e.pc.level, e.pc.cond)} dying={e.pc.dying} />}
-                  {showNpcHp && <HpBar hp={npc.hp} max={effectiveMaxHp(npc.maxHp, npc.level, npc.cond)} />}
+                  {npc && <NpcHpBar state={npc} compact />}
                   <ConditionRow cond={cond} size={15} />
                 </div>
                 {isGm && (

@@ -4,7 +4,7 @@ import OBR, { type Item } from "@owlbear-rodeo/sdk";
 import { patchNpc, tokenData, unlinkToken, whenReady } from "../obr";
 import { live, useLiveStates } from "../live";
 import { applyDamage, applyHealing, effectiveAc, effectiveMaxHp, setHp } from "../rules";
-import { hpColor, npcState } from "../shared";
+import { hpColor, npcPlayerView, npcState } from "../shared";
 import { ConditionRow } from "../popover/bits";
 import "../styles.css";
 import { watchForUpdates } from "../autoUpdate";
@@ -167,14 +167,20 @@ function TokenEditor() {
       {isGm && (
         <div className="te-row te-small">
           {d.kind === "npc" && (
-            <label className="te-check">
-              <input
-                type="checkbox"
-                checked={!!d.hidden}
-                onChange={(e) => patchNpc(item.id, (x) => ({ ...x, hidden: e.target.checked }))}
-              />
-              Ocultar a jugadores
-            </label>
+            <select
+              className="te-view"
+              value={npcPlayerView(d)}
+              title="Qué ven los jugadores de este PNJ"
+              onChange={(e) => {
+                // Se lee ya: el parche corre después y React habrá devuelto el select a su valor
+                const v = e.target.value;
+                patchNpc(item.id, (x) => ({ ...x, hidden: v !== "full", veil: v === "none" || undefined }));
+              }}
+            >
+              <option value="full">Jugadores: todo</option>
+              <option value="status">Jugadores: sin números</option>
+              <option value="none">Jugadores: nada</option>
+            </select>
           )}
           <button className="btn ghost" onClick={() => unlinkToken(item.id)}>
             Quitar

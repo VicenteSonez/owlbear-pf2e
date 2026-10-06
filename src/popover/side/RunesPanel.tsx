@@ -44,12 +44,12 @@ export function RunesPanel(props: {
   const etch = (i: number) => {
     if (etchedTotal >= max) return;
     patchCls((k) => ({ ...k, etched: { ...k.etched, [i]: (k.etched?.[i] ?? 0) + 1 } }));
-    notify({ label: `${c.name} graba ${runeLabel(runes, String(i))}`, tag: "Runa grabada" });
+    notify({ label: "Graba la runa:", title: runeLabel(runes, String(i)), tag: "Runa grabada" });
     playFx({ kind: "arcane", from: `pc:${c.id}`, color });
   };
   const trace = (i: number) => {
     patchCls((k) => ({ ...k, traced: [...(k.traced ?? []), { k: String(i), r: combat.active ? combat.round : 0 }] }));
-    notify({ label: `${c.name} traza ${runeLabel(runes, String(i))}`, tag: "Runa trazada" });
+    notify({ label: "Traza la runa:", title: runeLabel(runes, String(i)), tag: "Runa trazada" });
     playFx({ kind: "arcane", from: `pc:${c.id}`, color });
   };
   const setEtched = (i: number, v: number) =>
