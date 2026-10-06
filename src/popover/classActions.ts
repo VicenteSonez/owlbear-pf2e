@@ -18,7 +18,7 @@ export function spellstrikeStep(
   if (!ss?.armed) return false;
   const next = { ...ss, ...part };
   if (next.attack && next.spell) {
-    notify({ label: `Golpe de conjuro: ${next.attack} + ${next.spell}`, tag: "Golpe de conjuro" });
+    notify({ label: "Golpe de conjuro:", title: `${next.attack} + ${next.spell}`, tag: "Golpe de conjuro" });
     if (fx) playFx(fx);
     patch((x) => ({ ...x, cls: { ...x.cls, ss: { used: true } } }));
   } else {

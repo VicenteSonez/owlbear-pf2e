@@ -12,6 +12,7 @@ import { hpColor } from "../shared";
 import { dealDamage, healTarget } from "../damage";
 import { CondIcon, ConditionRow, Pips } from "./bits";
 import { DamageBox } from "./DamageBox";
+import { EditableName } from "./side/common";
 
 interface Props {
   character: Character;
@@ -22,6 +23,8 @@ interface Props {
   onPatch: (fn: (s: PcState) => PcState) => void;
   onLink: () => void;
   onUnlink: () => void;
+  // Solo el dueño de la hoja la puede renombrar
+  onRename?: (name: string) => void;
 }
 
 export function speedTitle(c: Character) {
@@ -32,7 +35,7 @@ export function speedTitle(c: Character) {
   return `${parts.join(", ")} = ${c.speed} ft`;
 }
 
-export function Vitals({ character: c, state: s, canEdit, showLink, token, onPatch, onLink, onUnlink }: Props) {
+export function Vitals({ character: c, state: s, canEdit, showLink, token, onPatch, onLink, onUnlink, onRename }: Props) {
   const maxHp = effectiveMaxHp(s.maxHp, s.level, s.cond);
   const { ac, applied } = effectiveAc(s.baseAc, s.acAdj, s.cond, s.shield);
   const pct = Math.max(0, Math.min(100, (s.hp / maxHp) * 100));
@@ -58,7 +61,13 @@ export function Vitals({ character: c, state: s, canEdit, showLink, token, onPat
         </div>
         <div className="identity">
           <div className="name-row">
-            <h1 title={c.name}>{c.name}</h1>
+            {onRename ? (
+              <h1 title="Nombre que ven todos (✎ para cambiarlo)">
+                <EditableName value={c.name} canEdit onChange={(v) => v && v !== c.name && onRename(v)} />
+              </h1>
+            ) : (
+              <h1 title={c.name}>{c.name}</h1>
+            )}
             <Pips
               value={s.hero}
               max={3}

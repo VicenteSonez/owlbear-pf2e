@@ -53,7 +53,7 @@ export function useCombatActions(combat: Combat, entries: Entry[], who: Roller, 
           if (combat.excluded.includes(d.characterId)) include.push(d.characterId);
         }
         else if (!combat.npcs.some((n) => n.tokenId === item.id)) {
-          npcs.push({ name: item.name || d?.name || "Criatura", mod, tokenId: item.id, hidden: !item.visible });
+          npcs.push({ name: (d?.kind === "npc" && d.nick) || item.name || d?.name || "Criatura", mod, tokenId: item.id, hidden: !item.visible });
         }
       }
       if (include.length) await combatStore.patch((c) => ({ ...c, excluded: c.excluded.filter((x) => !include.includes(x)) }));
@@ -69,7 +69,7 @@ export function useCombatActions(combat: Combat, entries: Entry[], who: Roller, 
           const temp = s.cls?.autoRage;
           if (!temp || s.cls?.rage || s.cond.fatigued) continue;
           await live.patch(s.id, (x) => ({ ...x, temp: Math.max(x.temp, temp), cls: { ...x.cls, rage: true } }));
-          await publish({ id: newId(), time: Date.now(), ...who, charName: s.name, label: `${s.name} entra en Furia`, formula: "", detail: `+${temp} PG temporales`, total: NaN, kind: "note", tag: "Furia" });
+          await publish({ id: newId(), time: Date.now(), ...who, charName: s.name, label: "Entra en", title: "Furia", formula: "", detail: `+${temp} PG temporales`, total: NaN, kind: "note", tag: "Furia" });
           const fx: RollFx = { kind: "rage", from: `pc:${s.id}` };
           if (inOwlbear) OBR.broadcast.sendMessage(CHANNEL_FX, fx, { destination: "ALL" }).catch(() => undefined);
         }

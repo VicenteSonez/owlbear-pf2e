@@ -6,7 +6,14 @@ import { useEffect, useState } from "react";
 import type { BonusType } from "./rules";
 import type { SaveKey, SpellKind } from "./shared";
 import type { MagicDesign } from "./fx";
-import type { HunterEdge } from "./classes";
+import type { HunterEdge, ImplementKind } from "./classes";
+
+// Implemento del taumaturgo: nombre, cómo se usa y notas de su efecto
+export interface Implement {
+  n: string;
+  kind: ImplementKind;
+  note?: string;
+}
 
 export interface PetAttack {
   name: string;
@@ -33,7 +40,8 @@ export interface PetStats {
   tough?: boolean;
 }
 
-// Bono o penalizador del jugador a sus ataques o daño (varios, cada uno con su tipo)
+// Bono o penalizador del jugador a sus ataques o daño (varios, cada uno con su tipo).
+// Al daño también puede ser de dados ("1d4") con su tipo de daño, o daño persistente.
 export interface CustomMod {
   id: string;
   label: string;
@@ -41,6 +49,25 @@ export interface CustomMod {
   type: BonusType;
   to: "atk" | "dmg";
   on: boolean;
+  dice?: string;
+  // Tipo de daño (fuego, sangrado…)
+  dt?: string;
+  // Es daño persistente: se agrega al objetivo en vez de sumarse a la tirada
+  pers?: boolean;
+  // Solo con crítico (p. ej. runa flamígera)
+  critOnly?: boolean;
+}
+
+// Ataque que el jugador agrega a mano (un arma encontrada en la partida)
+export interface CustomWeapon {
+  id: string;
+  name: string;
+  attack: number;
+  dmg: string;
+  ty: string;
+  ranged?: boolean;
+  agile?: boolean;
+  finesse?: boolean;
 }
 
 // Configuración de un conjuro (por nombre): sirve en todos los espacios donde aparezca
@@ -87,6 +114,18 @@ export interface ClassPrefs {
   thrallFx?: "void" | "spirit";
   // Elemento del aura cinética (si no se detecta de las dotes)
   element?: string;
+  implements?: Implement[];
+}
+
+// Conjuro agregado a mano (innato de un objeto, de una dote…): rango, usos por día y de qué
+// lanzador toma el ataque y la CD ("" = el principal; sin lanzadores, la CD de clase)
+export interface ExtraSpell {
+  id: string;
+  n: string;
+  rank: number;
+  // 0 = a voluntad
+  uses: number;
+  caster?: string;
 }
 
 export interface AddedEntry {
@@ -103,10 +142,16 @@ export interface Extras {
   qty?: Record<string, number>;
   invested?: Record<string, boolean>;
   added?: AddedEntry[];
+  // Objetos de la hoja que ya no están (pergaminos usados): no se muestran
+  gone?: Record<string, boolean>;
+  // Rango de cada pergamino, por clave del inventario
+  srank?: Record<string, number>;
+  xspells?: ExtraSpell[];
   money?: { cp: number; sp: number; gp: number; pp: number };
   notes?: Record<string, string>;
   pets?: Record<number, PetStats>;
   mods?: CustomMod[];
+  weapons?: CustomWeapon[];
   spells?: Record<string, SpellMeta>;
   // Filas de conjuro agregadas a mano, por grupo ("rep:<lanzador>:<rango>", "impulse"…)
   addedSpells?: Record<string, string[]>;

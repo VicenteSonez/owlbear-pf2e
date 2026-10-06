@@ -42,6 +42,41 @@ export interface PersistentDamage {
   id: string;
   formula: string;
   type: string;
+  // Vino de un golpe crítico: el daño persistente se duplica
+  crit?: boolean;
+}
+
+// Daño medio de una fórmula ("2d6+1" → 8): sirve para elegir el mayor de un mismo tipo
+export function formulaAvg(formula: string, crit = false): number {
+  const clean = formula.replace(/\s+/g, "").toLowerCase();
+  let total = 0;
+  for (const m of clean.matchAll(/([+-]?)(\d*)d(\d+)|([+-]?)(\d+)/g)) {
+    if (m[3]) total += (m[1] === "-" ? -1 : 1) * (m[2] ? parseInt(m[2], 10) : 1) * ((parseInt(m[3], 10) + 1) / 2);
+    else if (m[5]) total += (m[4] === "-" ? -1 : 1) * parseInt(m[5], 10);
+  }
+  return crit ? total * 2 : total;
+}
+
+export const persistentAvg = (p: PersistentDamage) => formulaAvg(p.formula, p.crit);
+export const persistentText = (p: PersistentDamage) => `${p.formula}${p.crit ? " ×2" : ""}`;
+
+// El daño persistente del mismo tipo no se suma: se queda solo el mayor
+export function addPersistent(list: PersistentDamage[] | undefined, p: PersistentDamage): PersistentDamage[] {
+  const cur = list ?? [];
+  const same = cur.find((x) => normType(x.type) === normType(p.type));
+  if (!same) return [...cur, p];
+  if (persistentAvg(p) <= persistentAvg(same)) return cur;
+  return cur.map((x) => (x === same ? { ...p, id: same.id } : x));
+}
+
+// Uno por tipo (el mayor): las hojas viejas pueden tener varios del mismo tipo
+export function persistentByType(list: PersistentDamage[] | undefined): { top: PersistentDamage; ids: string[] }[] {
+  const groups = new Map<string, PersistentDamage[]>();
+  for (const p of list ?? []) {
+    const k = normType(p.type);
+    groups.set(k, [...(groups.get(k) ?? []), p]);
+  }
+  return [...groups.values()].map((g) => ({ top: g.reduce((a, b) => (persistentAvg(b) > persistentAvg(a) ? b : a)), ids: g.map((x) => x.id) }));
 }
 
 // Bono o penalizador temporal que otro aplica (Himno valeroso, Provocar…). Se apaga solo
@@ -145,7 +180,7 @@ export function activeConditionIcons(c: Conditions | undefined): { icon: string;
   }
   const cover = COVERS.find((x) => x.value === c.cover);
   if (cover) out.push({ icon: cover.icon, label: cover.label });
-  for (const p of c.persistent ?? []) out.push({ icon: "persistent", label: `Persistente ${p.formula} ${p.type}`.trim() });
+  for (const { top: p } of persistentByType(c.persistent)) out.push({ icon: "persistent", label: `Persistente ${persistentText(p)} ${p.type}`.trim() });
   for (const b of c.buffs ?? []) if (b.icon) out.push({ icon: b.icon, label: b.n });
   return out;
 }
@@ -158,7 +193,8 @@ export type RollCtx =
   | { kind: "save"; key: "fortitude" | "reflex" | "will"; fear?: boolean }
   // target: clave de quien recibe el ataque ("pc:<id>" o "npc:<tokenId>"), para Provocar
   | { kind: "attack"; melee: boolean; finesse: boolean; target?: string }
-  | { kind: "damage"; melee: boolean; spell?: boolean }
+  // str: el daño suma Fuerza aunque sea a distancia (armas arrojadizas): lo penaliza Débil
+  | { kind: "damage"; melee: boolean; str?: boolean; spell?: boolean }
   | { kind: "spell-attack"; target?: string }
   | { kind: "spell-dc"; target?: string }
   | { kind: "impulse-attack" }
@@ -241,7 +277,7 @@ export function conditionMods(c: Conditions | undefined, ctx: RollCtx, shield?: 
       if (!ctx.melee || ctx.finesse) status("Torpe", cond.clumsy);
       break;
     case "damage":
-      if (ctx.melee) status("Débil", cond.enfeebled);
+      if (ctx.melee || ctx.str) status("Débil", cond.enfeebled);
       break;
     case "spell-attack":
     case "spell-dc":
@@ -371,6 +407,10 @@ export const levelDc = (level: number) => LEVEL_DC[Math.max(0, Math.min(LEVEL_DC
 export interface IwrEntry {
   t: string;
   v: number;
+  // De dónde sale (Anillo, Furia…): permite tener varias del mismo tipo
+  n?: string;
+  // Situacional: no se aplica sola, se activa a mano en cada daño
+  off?: boolean;
 }
 
 export interface Iwr {
@@ -426,8 +466,8 @@ export interface IwrPick {
 export function autoIwr(iwr: Iwr | undefined, type: string): IwrPick {
   return {
     imm: (iwr?.imm ?? []).some((t) => iwrMatches(t, type)),
-    res: (iwr?.res ?? []).flatMap((r, i) => (iwrMatches(r.t, type) ? [i] : [])),
-    weak: (iwr?.weak ?? []).flatMap((w, i) => (iwrMatches(w.t, type) ? [i] : [])),
+    res: (iwr?.res ?? []).flatMap((r, i) => (!r.off && iwrMatches(r.t, type) ? [i] : [])),
+    weak: (iwr?.weak ?? []).flatMap((w, i) => (!w.off && iwrMatches(w.t, type) ? [i] : [])),
   };
 }
 
@@ -444,12 +484,14 @@ export function resolveIwr(amount: number, iwr: Iwr | undefined, pick: IwrPick):
   return { total: Math.max(0, amount + weak - res), notes };
 }
 
+export const iwrEntryText = (e: IwrEntry) => `${e.t} ${e.v}${e.n ? ` (${e.n})` : ""}`;
+
 export function iwrText(iwr?: Iwr): string {
   if (!iwr) return "";
   return [
     ...(iwr.imm ?? []).map((t) => `Inmune ${t}`),
-    ...(iwr.res ?? []).map((r) => `Resist. ${r.t} ${r.v}`),
-    ...(iwr.weak ?? []).map((w) => `Debil. ${w.t} ${w.v}`),
+    ...(iwr.res ?? []).map((r) => `Resist. ${iwrEntryText(r)}`),
+    ...(iwr.weak ?? []).map((w) => `Debil. ${iwrEntryText(w)}`),
   ].join(" · ");
 }
 

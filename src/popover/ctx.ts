@@ -13,7 +13,10 @@ export interface RollResult {
 }
 
 export interface NoteRequest {
+  // Texto pequeño de arriba ("Lanza", "Explota a Goblin 2:")
   label: string;
+  // Nombre en grande (conjuro, rasgo, táctica…)
+  title?: string;
   detail?: string;
   tag?: string;
   secret?: boolean;

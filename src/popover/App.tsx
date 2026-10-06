@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import OBR from "@owlbear-rodeo/sdk";
 import { fmtMod, parsePathbuilder, type Character } from "../pathbuilder";
 import { Dice3D, evaluate, parseFormula, randomValues, type DiceStyle } from "../dice";
-import { autoLinkCandidate, inOwlbear, linkToken, publishPlayer, unlinkToken } from "../obr";
+import { autoLinkCandidate, inOwlbear, linkToken, publishPlayer, renameToken, unlinkToken } from "../obr";
 import { store } from "../storage";
 import { live, needsSheetSync, seedState, syncSheet, useLiveStates, type PcState } from "../live";
 import { DEGREE_LABEL, applyRecovery, degreeOf, type Degree } from "../rules";
@@ -43,6 +43,8 @@ const WIDTH_GM = 760;
 
 export interface RollRequest {
   label: string;
+  // Nombre en grande en la tarjeta (si no, va la etiqueta)
+  title?: string;
   formula: string;
   kind: RollEntry["kind"];
   crit?: boolean;
@@ -342,8 +344,10 @@ export function App() {
       const hideFromMe = (isSecret && !isGm) || !!opts.quick;
       const key = ++rollKey.current;
       const rollingFor = character?.id;
-      setCurrent({ label: req.label, formula, rolling: true, secret: isSecret });
-      if (!hideFromMe) showOverlay({ phase: "rolling", key, label: req.label });
+      // En la hoja se ve el nombre (si lo hay) en vez del texto de la tarjeta
+      const shownLabel = req.title ?? req.label;
+      setCurrent({ label: shownLabel, formula, rolling: true, secret: isSecret });
+      if (!hideFromMe) showOverlay({ phase: "rolling", key, label: shownLabel });
       try {
         const values = hideFromMe ? randomValues(f) : await dice.roll(f);
         const out = evaluate(f, values, { crit: req.crit, check: req.kind !== "damage" });
@@ -360,7 +364,7 @@ export function App() {
           showOverlay({
             phase: "result",
             key,
-            label: req.label,
+            label: shownLabel,
             formula: shownFormula,
             total: out.total,
             detail: out.detail,
@@ -372,9 +376,9 @@ export function App() {
         }
         setCurrent(
           isSecret && !isGm
-            ? { label: req.label, formula, rolling: false, secret: true }
+            ? { label: shownLabel, formula, rolling: false, secret: true }
             : {
-                label: req.label,
+                label: shownLabel,
                 formula: shownFormula,
                 total: out.total,
                 detail: out.detail,
@@ -394,6 +398,7 @@ export function App() {
           charId: req.charId ?? rollingFor,
           fx: req.fx,
           label: req.label,
+          title: req.title,
           formula: shownFormula,
           detail: out.detail,
           total: out.total,
@@ -428,6 +433,7 @@ export function App() {
         charName: n.charName ?? character?.name,
         charId: n.charId ?? character?.id,
         label: n.label,
+        title: n.title,
         formula: "",
         detail: n.detail ?? "",
         total: NaN,
@@ -590,6 +596,16 @@ export function App() {
               else OBR.notification.show("Selecciona tu token en el mapa y vuelve a pulsar Vincular.", "INFO");
             }}
             onUnlink={() => token && unlinkToken(token.id)}
+            onRename={
+              ownsCharacter
+                ? (name) => {
+                    store.setNick(character.id, name);
+                    setCharacters(store.characters());
+                    // El token vinculado también toma el nombre (en vez del de su imagen)
+                    if (token) renameToken(token.id, name).catch(() => undefined);
+                  }
+                : undefined
+            }
           />
         )}
         {character && !state && <section className="vitals muted">Preparando la hoja en la sala…</section>}
@@ -726,6 +742,8 @@ export function App() {
 
             {character && (
               <ClassBar
+                // Cada hoja con su propio panel: así no queda abierto el de la hoja anterior
+                key={`cb-${character.id}`}
                 character={character}
                 state={state}
                 extras={extras}
@@ -738,6 +756,7 @@ export function App() {
             {character && <PendingSaves charId={character.id} states={states} sheets={sheets} />}
             {character && (
               <SheetTabs
+                key={`tabs-${character.id}`}
                 character={character}
                 state={state}
                 canEdit={canEdit}

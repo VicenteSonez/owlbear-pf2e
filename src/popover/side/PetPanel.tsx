@@ -16,6 +16,8 @@ import { useLinkedToken, useSceneTokens } from "../hooks";
 import { useActions } from "../ctx";
 import { useNpcOptions } from "../NpcPicker";
 import { EditableName, PanelHead } from "./common";
+import { ThrallLinker } from "./ThrallLinker";
+import { defaultColor } from "../../fx";
 import type { SideProps } from "./types";
 
 const PET_TYPE: Record<string, string> = {
@@ -522,7 +524,8 @@ function Thralls(props: SideProps) {
           <option value="spirit">✦ Espíritus</option>
         </select>
       </div>
-      {!list.length && <p className="muted small">Lanza Create Thrall (pestaña Magia) con los tokens seleccionados en el mapa.</p>}
+      {!list.length && <p className="muted small">Lanza Create Thrall (pestaña Magia) o vincula/crea tus siervos aquí.</p>}
+      <ThrallLinker {...props} max={featuresOf(c).puppeteer ? 3 : 2} color={extras.cls?.colors?.[extras.cls?.thrallFx ?? "void"] ?? defaultColor(extras.cls?.thrallFx ?? "void")} />
       {list.map((t, idx) => (
         <div key={t.tok} className="weapon">
           <div className="weapon-head">

@@ -34,12 +34,18 @@ export interface Weapon {
   agile: boolean;
   finesse: boolean;
   ranged: boolean;
+  // Arrojadiza a distancia (jabalina, dardo…): el daño suma Fuerza, así que Débil la penaliza
+  thrown?: boolean;
   // Incremento de alcance en pies (solo armas a distancia)
   range?: number;
   // Bomba alquímica genérica del alquimista (daño editable)
   bomb?: boolean;
   // Fórmula de daño escrita a mano (reemplaza los dados del arma)
   dmgFormula?: string;
+  // Daño persistente del golpe (lo configura el jugador)
+  pers?: { f: string; ty: string; crit?: boolean };
+  // Ataque agregado a mano por el jugador (no viene de Pathbuilder)
+  custom?: boolean;
 }
 
 export interface ShieldInfo {
@@ -90,7 +96,7 @@ export interface Pet {
 }
 
 // Sube este número cuando el lector cambie: las hojas guardadas se vuelven a leer solas
-export const PARSER_VERSION = 4;
+export const PARSER_VERSION = 5;
 
 export interface Character {
   parserVersion?: number;
@@ -187,6 +193,9 @@ const RANGED_WEAPONS: [string, number][] = [
   ["slide pistol", 30], ["harmona gun", 150], ["double-barreled pistol", 30], ["double-barreled musket", 60],
   ["dwarven scattergun", 30], ["pistol", 40], ["musket", 70],
 ];
+
+// Armas a distancia arrojadizas: suman la Fuerza al daño (el arco y la honda no)
+const THROWN_WEAPONS = ["javelin", "dart", "shuriken", "bola", "throwing knife", "chakri", "chakram", "boomerang", "aklys", "harpoon", "throwing"];
 
 // Sentidos especiales: se buscan en los rasgos especiales y en los nombres de dotes
 const SENSES: [string, string][] = [
@@ -332,6 +341,7 @@ export function parsePathbuilder(raw: unknown): Character {
       agile: !/bow\b/.test(baseName) && AGILE_WEAPONS.some((a) => baseName.includes(a)),
       finesse: FINESSE_WEAPONS.some((a) => baseName.includes(a)),
       ranged: !!ranged,
+      thrown: !!ranged && THROWN_WEAPONS.some((t) => baseName.includes(t)),
       range: ranged?.[1],
     };
   });

@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { itemKeys } from "../../extras";
+import { itemKeys, type Extras } from "../../extras";
+import type { Character } from "../../pathbuilder";
 import { Counter, EditableName, PanelHead } from "./common";
 import { setIn, type SideProps } from "./types";
 
@@ -14,17 +15,30 @@ const EQUIPPED = "Equipado";
 const LOOSE = "Llevado";
 const MAX_INVESTED = 10;
 
-export function InventoryPanel({ character: c, extras, canEditExtras, updateExtras }: SideProps) {
-  const [newName, setNewName] = useState("");
-  const [newWhere, setNewWhere] = useState(LOOSE);
+export interface InvRow {
+  key: string;
+  name: string;
+  qty: number;
+  container: string;
+  added: boolean;
+}
+
+// Filas del inventario: las de Pathbuilder (menos las que ya no están) y las agregadas a mano
+export function inventoryRows(c: Character, extras: Extras): InvRow[] {
   const base = c.items ?? [];
   const keys = itemKeys(base);
-  const rows = [
+  return [
     ...base.map((it, i) => ({ key: keys[i], name: it.name, qty: it.qty, container: it.container ?? LOOSE, added: false })),
     ...(extras.added ?? [])
       .filter((a) => a.list === "inv")
       .map((a) => ({ key: a.key, name: a.name, qty: 1, container: a.container ?? LOOSE, added: true })),
-  ];
+  ].filter((r) => !extras.gone?.[r.key]);
+}
+
+export function InventoryPanel({ character: c, extras, canEditExtras, updateExtras }: SideProps) {
+  const [newName, setNewName] = useState("");
+  const [newWhere, setNewWhere] = useState(LOOSE);
+  const rows = inventoryRows(c, extras);
   // Grupos con objetos; "Llevado" siempre se ofrece al agregar
   const allContainers = [...new Set([EQUIPPED, LOOSE, ...rows.map((r) => r.container)])];
   const containers = allContainers.filter((ct) => rows.some((r) => r.container === ct));

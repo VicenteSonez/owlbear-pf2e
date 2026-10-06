@@ -54,7 +54,11 @@ There are four Vite entry pages, each its own Owlbear iframe:
 - **Token link / NPC state**: scene item metadata (`META_TOKEN`, `TokenData` in `src/shared.ts`).
   - PC tokens hold only `{kind:"pc", characterId, ownerId}`; their numbers come from live state.
   - NPC tokens hold their own HP/AC/cond. Read them through `npcState()` and write through `patchNpc()`.
-- **Side tabs** (`src/popover/side/`: Dotes, Inventario, Magia, Recetas, Mascota) split their data by who can edit it:
+  - `patchNpc` runs its updater **after** an await (OBR fetches the items first), so read `e.target.value`/`checked` into a const before calling it: by then React has reset the controlled input.
+  - What players see of an NPC is `npcPlayerView()`: `hidden` hides the numbers (bar with a word like "Malherido" + conditions, no AC), `veil` hides everything. New NPCs start with numbers hidden.
+  - `nick` is the name the GM chose (`renameToken` also renames the Owlbear item). Always build NPC names with `npcLabel({ name, num, nick })`.
+- **PC names**: the owner can rename their character from the sheet header. The nickname lives in localStorage (`pf2.nicks`) and `store.characters()` applies it, so the sheet, live state and published sheet all use it.
+- **Side tabs** (`src/popover/side/`: Dotes, Inventario, Magia, Recetas, Mascota) split their data by who can edit it. Magia is always shown: it also lists scrolls (inventory items named "Scroll of…", consumed on use through `Extras.gone`/`qty`) and spells added by hand (`Extras.xspells`, uses in `PcState.res.used["x:<id>"]`). Attacks added by hand are `Extras.weapons` (`customWeapon()` in `strike.ts`).
   - Resources the GM can also change (focus points, spent slots, Advanced Alchemy, Versatile Vials) go in `PcState.res`. Slot keys are `"<caster>:<rank>"`: a spent count for spontaneous casters, a bitmask for prepared ones.
   - The owner's notes (quantities, invested, money, renamed entries, feat notes, pet modifiers) go in `Extras` (`src/extras.ts`, localStorage `pf2.extras.<charId>`). They're published with the sheet in player metadata, so the GM sees them read-only.
   - Pets get their own `PcState` (`petStateId()`, `pet` field) to reuse HP bars, the token editor and the GM panel. They're left out of initiative.
@@ -63,6 +67,7 @@ There are four Vite entry pages, each its own Owlbear iframe:
 - **Targets and class state** (in `PcState`): `target` (NPC token the PC attacks), `color` (its target ring), `iwr`, and `cls` (`ClassState` from `src/classes.ts`: rage, panache, prey, taunt, stratagem, overdrive, runes…). NPCs keep the same kind of data in their token (`level`, `num`, `saves`, `attacks`, `spells`, `shield`, `iwr`, `target`).
 - **Rolls**: sent with `OBR.broadcast` on `CHANNEL_ROLL` (destination ALL). `visibleEntry()` hides secret rolls from non-GMs. The log and toasts are kept per browser.
   - `kind: "note"` entries are notices without dice (spell cast, tactic, rune…). They're published with `notify()`.
+  - `label` is the small line on top and `title` the big name (spell, feature, ability). Toast cards grow with their text: `toastCardHeight()` in `shared.ts` is used by both the toast page and the background, which sizes the popover.
   - `RollRequest.vs` compares the roll with a DC/AC and fills `degree`; the DC is only shown when `showDc` is set.
 - **Shared requests** (`src/requests.ts`): one room key per request so players don't overwrite each other.
   - Damage requests (`${ID}/dmg/<id>`): a PC hits an NPC; the GM authorizes it (with IWR) in GM → "Daño pendiente".
@@ -79,6 +84,8 @@ There are four Vite entry pages, each its own Owlbear iframe:
 
 ### Damage, targets and class features
 
+- Persistent damage of the same type doesn't stack: `addPersistent()` keeps the highest (by average) and `persistentByType()` rolls one damage and one flat check per type. `crit` doubles it. Weapons (`Weapon.pers`, set in `WeaponFlags`), the player's custom damage mods and NPC attacks can carry persistent damage; it travels in `DamageReq.pers` for the GM to confirm.
+- IWR entries can repeat a type with an origin (`n`); `off` marks a situational one that `autoIwr` doesn't pick.
 - `src/damage.ts` applies damage/healing to any target (`TargetRef`: PC/pet or NPC token) with immunity, resistance (highest only), weakness (added after the total) and shield block. Use it instead of patching HP directly.
 - `src/classes.ts` is pure: `featuresOf(c)` detects class features **by feat/special name** (so archetype dedications work too) and has the per-level numbers.
 - `src/strike.ts` is pure: weapon attack and damage with conditions, the player's custom mods, the chosen target and class features (Rage, Sneak Attack, Precise Strike, stratagem…).
@@ -119,7 +126,7 @@ The UI shows values that already include conditions.
   - Effects that must be seen even when the roll is secret (NPC attacks, class effects) go on `CHANNEL_FX`. `RollFx.from`/`to` are token ids or `pc:<id>`; with `to`, attacks fly toward that token (`playAttackTo`).
   - Players don't see effects on tokens that are hidden from them.
 - Every shader receives `uniform vec3 col` (the chosen color). Magic designs (`MAGIC_DESIGNS`) and class effects (`CLASS_FX`) live in `fx.ts`; colors chosen by the player are in `Extras.magicFx` and `Extras.cls.colors`.
-- The background also draws target rings (`syncTargets`) in each PC's/NPC's color, and markers for prey, taunt, exploit and thralls on NPC tokens.
+- The background also draws target rings (`syncTargets`) in each PC's/NPC's color, and markers for prey, taunt and exploit on NPC tokens. Thralls get a dashed ring and a skull badge on any token (`syncThralls`), even without PF2e data. Create Thrall without a selection opens `ThrallLinker` (link the selection or create circle tokens next to the necromancer, `src/popover/thralls.ts`).
 
 ## Conventions
 

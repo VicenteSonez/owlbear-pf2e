@@ -1,7 +1,7 @@
 import { StrictMode, useEffect, useState, type CSSProperties } from "react";
 import { createRoot } from "react-dom/client";
 import { store } from "../storage";
-import { TOAST_KEY, type ToastItem } from "../shared";
+import { TOAST_KEY, toastCardHeight, type ToastItem } from "../shared";
 import { DEGREE_LABEL } from "../rules";
 import { watchForUpdates } from "../autoUpdate";
 import "../styles.css";
@@ -17,10 +17,13 @@ function Card({ item, onDismiss }: { item: ToastItem; onDismiss: () => void }) {
   const degree = e.degree ? `${DEGREE_LABEL[e.degree]}${e.dc ? ` · CD ${e.dc}` : ""}` : "";
   const tag =
     e.secret ? "🔒 secreta" : degree || e.tag || (e.nat === 20 ? "20 natural" : e.nat === 1 ? "1 natural" : e.crit ? "crítico" : "");
+  // Arriba en pequeño lo que pasó; en grande, el nombre de la habilidad, conjuro o tirada
+  const big = e.title ?? e.label;
+  const small = e.title ? e.label : "";
   return (
     <div
       className={`toast ${note ? "note" : ""} ${e.nat === 20 ? "nat20" : e.nat === 1 ? "nat1" : ""} ${e.degree ? (e.degree.includes("success") ? "ok" : "fail") : ""}`}
-      style={{ "--toast-color": e.diceColor ?? e.playerColor } as CSSProperties}
+      style={{ "--toast-color": e.diceColor ?? e.playerColor, height: toastCardHeight(e) } as CSSProperties}
       onClick={onDismiss}
       title="Clic para cerrar"
     >
@@ -31,11 +34,12 @@ function Card({ item, onDismiss }: { item: ToastItem; onDismiss: () => void }) {
       </div>
       <div className="t-body">
         <div className="t-text">
+          {small && <div className="t-pre">{small}</div>}
           <div className="t-label">
-            {e.label}
+            {big}
             {e.targetName ? <span className="t-target"> → {e.targetName}</span> : null}
           </div>
-          {note && e.detail && <div className="t-detail">{e.detail}</div>}
+          {note && e.detail && <div className="t-detail note">{e.detail}</div>}
           {!note && !hidden && (
             <div className="t-detail">
               {e.formula}: {e.detail}

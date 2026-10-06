@@ -76,6 +76,18 @@ export async function patchNpc(itemId: string, fn: (n: NpcState) => NpcState) {
   });
 }
 
+// Nombre elegido para un token: se guarda en el token de Owlbear y en sus datos PF2e
+export async function renameToken(itemId: string, name: string) {
+  await OBR.scene.items.updateItems([itemId], (drafts) => {
+    for (const d of drafts) {
+      if (name) d.name = name;
+      const cur = d.metadata[META_TOKEN] as TokenData | undefined;
+      if (cur?.kind === "npc") d.metadata[META_TOKEN] = { ...cur, nick: name || undefined };
+      else if (cur) d.metadata[META_TOKEN] = { ...cur, name: name || cur.name };
+    }
+  });
+}
+
 export async function unlinkToken(itemId: string) {
   await OBR.scene.items.updateItems([itemId], (drafts) => {
     for (const d of drafts) d.metadata[META_TOKEN] = undefined; // Owlbear ignora `delete` en el borrador

@@ -17,7 +17,13 @@ export function LogList({ log, compact }: { log: RollEntry[]; compact?: boolean 
               <span className="muted">{time(e.time)}</span>{" "}
               <span style={{ color: readableColor(e.playerColor) }}>{e.playerName}</span>
               {e.charName && !compact ? <span className="muted"> ({e.charName})</span> : null} — {e.secret ? "🔒 " : ""}
-              {e.label}
+              {e.title ? (
+                <>
+                  {e.label} <b>{e.title}</b>
+                </>
+              ) : (
+                e.label
+              )}
               {e.targetName ? <span className="muted"> → {e.targetName}</span> : null}
               {note ? (e.detail ? <span className="muted">: {e.detail}</span> : null) : <>: <b>{hidden ? "enviada al GM" : e.total}</b></>}
               {!hidden && e.degree ? <span className={e.degree.includes("success") ? "deg ok" : "deg fail"}> {DEGREE_LABEL[e.degree]}</span> : null}

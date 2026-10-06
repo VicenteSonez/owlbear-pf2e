@@ -2,7 +2,8 @@
 // objetivo elegido y rasgos de clase (Furia, Ataque furtivo, Golpe preciso…). Puro.
 import { fmtMod, type Character, type Weapon } from "./pathbuilder";
 import type { PcState } from "./live";
-import type { Extras } from "./extras";
+import type { CustomWeapon, Extras } from "./extras";
+import type { PersistentSpec } from "./shared";
 import { conditionMods, modsText, stackMods, type Conditions, type Mod } from "./rules";
 import {
   antithesisBonus,
@@ -35,6 +36,8 @@ export interface StrikeOpts {
   sneak?: boolean;
   // Ráfaga contra la presa forzada a mano
   flurry?: boolean;
+  // Tirada de daño crítico (para lo que solo aparece con crítico)
+  crit?: boolean;
 }
 
 export interface StrikeContext {
@@ -45,8 +48,29 @@ export interface StrikeContext {
   slinger?: SlingerKind;
 }
 
-const customMods = (x: Extras, to: "atk" | "dmg"): Mod[] =>
-  (x.mods ?? []).filter((m) => m.on && m.to === to && m.value).map((m) => ({ label: m.label || "Ajuste", type: m.type, value: m.value }));
+const customMods = (x: Extras, to: "atk" | "dmg", crit = false): Mod[] =>
+  (x.mods ?? [])
+    .filter((m) => m.on && m.to === to && m.value && !m.dice && !m.pers && (!m.critOnly || crit))
+    .map((m) => ({ label: m.label || "Ajuste", type: m.type, value: m.value }));
+
+// Arma agregada a mano → arma de la hoja
+export function customWeapon(w: CustomWeapon): Weapon {
+  return {
+    name: w.name || "Ataque",
+    key: `custom:${w.id}`,
+    attack: w.attack,
+    diceCount: 1,
+    dieSides: 4,
+    damageBonus: 0,
+    damageType: w.ty,
+    extra: [],
+    agile: !!w.agile,
+    finesse: !!w.finesse,
+    ranged: !!w.ranged,
+    dmgFormula: w.dmg || "1d4",
+    custom: true,
+  };
+}
 
 // Ventajas que solo cuentan contra la presa
 const isPrey = (ctx: StrikeContext, o: StrikeOpts) => !!o.target && ctx.s?.cls?.prey === o.target.tok;
@@ -84,7 +108,9 @@ export function strikeDamage(w: Weapon, ctx: StrikeContext, o: StrikeOpts) {
   const melee = !w.ranged;
   const cls = s?.cls;
   const level = c.level;
-  const mods: Mod[] = [...conditionMods(s?.cond, { kind: "damage", melee }), ...customMods(x, "dmg")];
+  // Las arrojadizas suman Fuerza al daño: Débil las penaliza (las bombas no)
+  const str = !!w.thrown && !w.bomb;
+  const mods: Mod[] = [...conditionMods(s?.cond, { kind: "damage", melee, str }), ...customMods(x, "dmg", o.crit)];
   const dice: { f: string; label: string }[] = [];
   const typeNotes: string[] = [];
 
@@ -109,6 +135,12 @@ export function strikeDamage(w: Weapon, ctx: StrikeContext, o: StrikeOpts) {
     if (precisionAuto && /precision/i.test(e.type)) continue;
     dice.push({ f: `${e.dice}d${e.sides}`, label: e.type || "extra" });
   }
+  // Dados extra del jugador (+1d4 de fuego…)
+  for (const m of x.mods ?? []) {
+    if (!m.on || m.to !== "dmg" || !m.dice || m.pers) continue;
+    if (m.critOnly && !o.crit) continue;
+    dice.push({ f: m.dice, label: `${m.label || "Extra"}${m.dt ? ` (${m.dt})` : ""}` });
+  }
   if (f.edge === "precision" && o.preyFirst && isPrey(ctx, o)) dice.push({ f: `${rangerPrecisionDice(level)}d8`, label: "Precisión (presa)" });
   const sk = ctx.slinger ?? guessSlinger(w);
   const sling = f.slinger ? slingerDamage(sk, f.slingerLegend) : null;
@@ -128,6 +160,31 @@ export function strikeDamage(w: Weapon, ctx: StrikeContext, o: StrikeOpts) {
   const baseDice = w.dmgFormula?.trim() || `${w.diceCount}d${w.dieSides}`;
   const flat = (w.damageBonus ?? 0) + total;
   const formula = `${baseDice}${flat ? fmtMod(flat) : ""}${dice.map((d) => (d.f.startsWith("-") ? d.f : `+${d.f}`)).join("")}`.replace(/^\+/, "");
-  const notes = [modsText(applied), ...dice.map((d) => `${d.label} ${d.f}`), ...typeNotes].filter(Boolean).join(" · ");
-  return { formula, notes, sneak: dice.some((d) => d.label === "Ataque furtivo"), finisher: dice.some((d) => d.label === "Golpe de gracia") };
+  // Daño persistente: el del arma y el de los bonos del jugador (los de "solo crítico" requieren crítico)
+  const pers: PersistentSpec[] = [];
+  if (w.pers?.f && (!w.pers.crit || o.crit)) pers.push(w.pers);
+  for (const m of x.mods ?? []) {
+    if (!m.on || m.to !== "dmg" || !m.pers) continue;
+    if (m.critOnly && !o.crit) continue;
+    const f = m.dice || (m.value ? String(m.value) : "");
+    if (f) pers.push({ f, ty: m.dt ?? "" });
+  }
+  const notes = [
+    modsText(applied),
+    ...dice.map((d) => `${d.label} ${d.f}`),
+    ...typeNotes,
+    ...pers.map((p) => `${p.f}${o.crit ? " ×2" : ""} persistente ${p.ty}`.trim()),
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  // Dados de otro tipo, para que el GM sepa qué parte del daño es de cada tipo
+  const typed = (x.mods ?? []).filter((m) => m.on && m.to === "dmg" && m.dice && !m.pers && m.dt && (!m.critOnly || o.crit)).map((m) => `${m.dice} ${m.dt}`);
+  return {
+    formula,
+    notes,
+    pers,
+    typed,
+    sneak: dice.some((d) => d.label === "Ataque furtivo"),
+    finisher: dice.some((d) => d.label === "Golpe de gracia"),
+  };
 }

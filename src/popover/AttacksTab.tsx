@@ -4,10 +4,11 @@ import type { PcState } from "../live";
 import { BONUS_LABEL, checkAdjust, modsText, type BonusType } from "../rules";
 import { applyWeaponFlags, extraKey, store, type WeaponFlags } from "../storage";
 import { newId } from "../shared";
-import type { CustomMod, Extras } from "../extras";
+import type { CustomMod, CustomWeapon, Extras } from "../extras";
+import { parseFormula } from "../dice";
 import { ATTACK_FX, defaultWeaponFx, type AttackFx } from "../fx";
 import { featuresOf, guessSlinger, type SlingerKind } from "../classes";
-import { strikeAttack, strikeDamage, type StrikeContext, type StrikeOpts } from "../strike";
+import { customWeapon, strikeAttack, strikeDamage, type StrikeContext, type StrikeOpts } from "../strike";
 import { damageReqs } from "../requests";
 import { FxDir } from "./FxDir";
 import { NpcPicker, useNpcOptions } from "./NpcPicker";
@@ -15,6 +16,18 @@ import { useActions } from "./ctx";
 import { spellstrikeStep } from "./classActions";
 import { DamageTypeList } from "./DamageBox";
 import { FxColors } from "./FxColors";
+import { EditableName } from "./side/common";
+import { NpcStatus } from "./NpcStatus";
+
+const isDice = (t: string) => /d/i.test(t);
+const validFormula = (t: string) => {
+  try {
+    parseFormula(t);
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 const MAP_LABEL = ["1er ataque", "2º ataque", "3er ataque"];
 const weaponKey = (w: Weapon) => w.key ?? w.name.toLowerCase();
@@ -36,6 +49,10 @@ function CustomMods({ extras, canEdit, update }: { extras: Extras; canEdit: bool
   const [value, setValue] = useState("");
   const [type, setType] = useState<BonusType>("circumstance");
   const [to, setTo] = useState<CustomMod["to"]>("atk");
+  const [dt, setDt] = useState("");
+  const [pers, setPers] = useState(false);
+  const [critOnly, setCritOnly] = useState(false);
+  const [error, setError] = useState("");
   const mods = extras.mods ?? [];
   const active = mods.filter((m) => m.on);
   const set = (fn: (l: CustomMod[]) => CustomMod[]) => update((x) => ({ ...x, mods: fn(x.mods ?? []) }));
@@ -44,7 +61,7 @@ function CustomMods({ extras, canEdit, update }: { extras: Extras; canEdit: bool
       <button className="cm-head" onClick={() => setOpen((o) => !o)}>
         <b>Bonos y penalizadores</b>
         <span className="muted small">
-          {active.length ? active.map((m) => `${m.label || "Ajuste"} ${fmtMod(m.value)}`).join(" · ") : "Ninguno activo"}
+          {active.length ? active.map((m) => `${m.label || "Ajuste"} ${modValueText(m)}`).join(" · ") : "Ninguno activo"}
         </span>
         <span className="muted">{open ? "▴" : "▾"}</span>
       </button>
@@ -56,9 +73,12 @@ function CustomMods({ extras, canEdit, update }: { extras: Extras; canEdit: bool
                 {m.on ? "Activo" : "Apagado"}
               </button>
               <span className="cm-label">{m.label || "Ajuste"}</span>
-              <b className={m.value < 0 ? "down" : "up"}>{fmtMod(m.value)}</b>
+              <b className={m.value < 0 ? "down" : "up"}>{modValueText(m)}</b>
               <span className="muted small">
-                {BONUS_LABEL[m.type]} · {m.to === "atk" ? "ataque" : "daño"}
+                {m.dice || m.pers ? "" : `${BONUS_LABEL[m.type]} · `}
+                {m.to === "atk" ? "ataque" : m.pers ? "daño persistente" : "daño"}
+                {m.dt ? ` · ${m.dt}` : ""}
+                {m.critOnly ? " · solo crítico" : ""}
               </span>
               {canEdit && (
                 <button className="row-x" title="Quitar" onClick={() => set((l) => l.filter((x) => x.id !== m.id))}>
@@ -72,16 +92,37 @@ function CustomMods({ extras, canEdit, update }: { extras: Extras; canEdit: bool
               className="cm-form"
               onSubmit={(e) => {
                 e.preventDefault();
-                const v = parseInt(value.replace(/[^\d-]/g, ""), 10);
-                if (!Number.isFinite(v) || !v) return;
-                set((l) => [...l, { id: newId(), label: label.trim(), value: v, type, to, on: true }]);
+                const raw = value.trim().replace(/^\+/, "");
+                const dmg = to === "dmg";
+                // Al daño se puede escribir un dado (1d4) con su tipo
+                if (dmg && isDice(raw)) {
+                  if (!validFormula(raw)) {
+                    setError("Fórmula no válida (ej. 1d4, 2d6)");
+                    return;
+                  }
+                  set((l) => [...l, { id: newId(), label: label.trim(), value: 0, type: "untyped", to, on: true, dice: raw, dt: dt.trim() || undefined, pers: pers || undefined, critOnly: critOnly || undefined }]);
+                } else {
+                  const v = parseInt(raw.replace(/[^\d-]/g, ""), 10);
+                  if (!Number.isFinite(v) || !v) {
+                    setError(dmg ? "Escribe un número (+1) o un dado (1d4)" : "Escribe un número (+1, −2)");
+                    return;
+                  }
+                  set((l) => [
+                    ...l,
+                    { id: newId(), label: label.trim(), value: v, type: pers ? "untyped" : type, to, on: true, dt: dmg ? dt.trim() || undefined : undefined, pers: (dmg && pers) || undefined, critOnly: (dmg && critOnly) || undefined },
+                  ]);
+                }
+                setError("");
                 setLabel("");
                 setValue("");
+                setDt("");
+                setPers(false);
+                setCritOnly(false);
               }}
             >
               <input placeholder="Nombre (Bendecir…)" value={label} onChange={(e) => setLabel(e.target.value)} />
-              <input className="sm" placeholder="+1" value={value} onChange={(e) => setValue(e.target.value)} />
-              <select value={type} onChange={(e) => setType(e.target.value as BonusType)}>
+              <input className="sm" placeholder={to === "dmg" ? "+1 / 1d4" : "+1"} value={value} onChange={(e) => setValue(e.target.value)} />
+              <select value={type} disabled={to === "dmg" && (isDice(value) || pers)} title="Tipo de bono (los dados y el persistente no se apilan por tipo)" onChange={(e) => setType(e.target.value as BonusType)}>
                 <option value="status">Estado</option>
                 <option value="circumstance">Circunstancial</option>
                 <option value="item">Objeto</option>
@@ -91,13 +132,90 @@ function CustomMods({ extras, canEdit, update }: { extras: Extras; canEdit: bool
                 <option value="atk">Ataque</option>
                 <option value="dmg">Daño</option>
               </select>
+              {to === "dmg" && (
+                <>
+                  <input className="md" list="pf2-damage-types" placeholder="Tipo de daño" value={dt} onChange={(e) => setDt(e.target.value)} />
+                  <label className="te-check" title="Se agrega al objetivo como daño persistente">
+                    <input type="checkbox" checked={pers} onChange={(e) => setPers(e.target.checked)} /> Persistente
+                  </label>
+                  <label className="te-check" title="Solo se suma en las tiradas de crítico">
+                    <input type="checkbox" checked={critOnly} onChange={(e) => setCritOnly(e.target.checked)} /> Solo crítico
+                  </label>
+                  <DamageTypeList />
+                </>
+              )}
               <button className="btn">+</button>
             </form>
           )}
-          <p className="muted small">Del mismo tipo solo cuenta el mayor bono y el peor penalizador; los sin tipo se suman.</p>
+          {error && <p className="error small">{error}</p>}
+          <p className="muted small">Del mismo tipo solo cuenta el mayor bono y el peor penalizador; los sin tipo se suman. Al daño también puedes poner dados (1d4) con su tipo, o daño persistente.</p>
         </div>
       )}
     </div>
+  );
+}
+
+const modValueText = (m: CustomMod) => (m.dice ? `+${m.dice}` : fmtMod(m.value));
+
+// Formulario para agregar un ataque a mano (arma encontrada en la partida)
+function AddWeapon({ onAdd }: { onAdd: (w: CustomWeapon) => void }) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [atk, setAtk] = useState("");
+  const [dmg, setDmg] = useState("");
+  const [ty, setTy] = useState("");
+  const [ranged, setRanged] = useState(false);
+  const [error, setError] = useState("");
+  if (!open) {
+    return (
+      <button className="btn ghost add-weapon" onClick={() => setOpen(true)}>
+        + Agregar ataque
+      </button>
+    );
+  }
+  return (
+    <form
+      className="weapon add-weapon-form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        const a = parseInt(atk.replace(/[^\d-]/g, ""), 10);
+        if (!name.trim() || !Number.isFinite(a)) {
+          setError("Escribe el nombre y el bono de ataque.");
+          return;
+        }
+        if (!validFormula(dmg.trim())) {
+          setError("Daño no válido (ej. 1d8+4).");
+          return;
+        }
+        onAdd({ id: newId(), name: name.trim(), attack: a, dmg: dmg.trim(), ty: ty.trim(), ranged: ranged || undefined });
+        setOpen(false);
+        setName("");
+        setAtk("");
+        setDmg("");
+        setTy("");
+        setError("");
+      }}
+    >
+      <div className="weapon-head">
+        <b>Nuevo ataque</b>
+        <span className="muted small">Ágil, sutil y demás se marcan después en el arma</span>
+      </div>
+      <div className="cm-form">
+        <input placeholder="Nombre (Hacha +1…)" value={name} onChange={(e) => setName(e.target.value)} />
+        <input className="sm" placeholder="+7" title="Bono de ataque total" value={atk} onChange={(e) => setAtk(e.target.value)} />
+        <input className="md" placeholder="1d8+4" title="Daño" value={dmg} onChange={(e) => setDmg(e.target.value)} />
+        <input className="md" list="pf2-damage-types" placeholder="Tipo" value={ty} onChange={(e) => setTy(e.target.value)} />
+        <button type="button" className={`chip ${ranged ? "on" : ""}`} onClick={() => setRanged((v) => !v)}>
+          {ranged ? "A distancia" : "Cuerpo a cuerpo"}
+        </button>
+        <button className="btn primary">Agregar</button>
+        <button type="button" className="btn ghost" onClick={() => setOpen(false)}>
+          Cancelar
+        </button>
+        <DamageTypeList />
+      </div>
+      {error && <p className="error small">{error}</p>}
+    </form>
   );
 }
 
@@ -107,11 +225,14 @@ export function AttacksTab({ character: c, state, canEdit, extras, canEditExtras
   const [flagsFor, setFlagsFor] = useState(c.id);
   const [fxPref, setFxPrefState] = useState(() => store.fxPref(c.id));
   const [opts, setOpts] = useState<StrikeOpts>({});
+  // Arma con su configuración abierta (persistente, datos del ataque agregado)
+  const [cfg, setCfg] = useState<string | null>(null);
   if (flagsFor !== c.id) {
     setFlagsFor(c.id);
     setFlags(store.weaponFlags(c.id));
     setFxPrefState(store.fxPref(c.id));
     setOpts({});
+    setCfg(null);
   }
   const f = featuresOf(c);
   const npcs = useNpcOptions();
@@ -132,7 +253,16 @@ export function AttacksTab({ character: c, state, canEdit, extras, canEditExtras
     store.setWeaponFlags(c.id, next);
   };
   const fxOf = (w: Weapon): AttackFx | "none" => flags[weaponKey(w)]?.fx ?? defaultWeaponFx(w);
-  const weapons = c.weapons.map((w) => applyWeaponFlags(w, flags[weaponKey(w)]));
+  const customs = extras.weapons ?? [];
+  const weapons = [...c.weapons, ...customs.map(customWeapon)].map((w) => applyWeaponFlags(w, flags[weaponKey(w)]));
+  const setCustom = (id: string, patch: Partial<CustomWeapon>) =>
+    updateExtras((x) => ({ ...x, weapons: (x.weapons ?? []).map((w) => (w.id === id ? { ...w, ...patch } : w)) }));
+  const customOf = (w: Weapon) => (w.custom ? customs.find((x) => `custom:${x.id}` === w.key) : undefined);
+  const rename = (w: Weapon, v: string) => {
+    const cw = customOf(w);
+    if (cw) setCustom(cw.id, { name: v || cw.name });
+    else setFlag(w, { name: v && v !== c.weapons.find((x) => weaponKey(x) === weaponKey(w))?.name ? v : undefined });
+  };
   const ctxFor = (w: Weapon): StrikeContext => ({ c, s: state, x: extras, f, slinger: flags[weaponKey(w)]?.sling });
 
   const setTarget = (tok: string | undefined) => onPatch((s) => ({ ...s, target: tok }));
@@ -159,7 +289,7 @@ export function AttacksTab({ character: c, state, canEdit, extras, canEditExtras
   };
 
   const damage = async (w: Weapon, crit: boolean) => {
-    const d = strikeDamage(w, ctxFor(w), o);
+    const d = strikeDamage(w, ctxFor(w), { ...o, crit });
     const r = await roll({
       label: `${w.name}: ${crit ? "Crítico" : "Daño"}${w.damageType ? ` (${w.damageType})` : ""}`,
       formula: d.formula,
@@ -192,6 +322,8 @@ export function AttacksTab({ character: c, state, canEdit, extras, canEditExtras
         crit,
         label: w.name,
         mortal: mortal || undefined,
+        pers: d.pers.length ? d.pers : undefined,
+        typed: d.typed.length ? d.typed : undefined,
         t: Date.now(),
       });
     }
@@ -225,6 +357,7 @@ export function AttacksTab({ character: c, state, canEdit, extras, canEditExtras
           {!target && <FxDir dir={fxPref.dir} on={fxPref.on} onChange={setFxPref} />}
         </div>
       )}
+      {target && <NpcStatus state={target.state} name={target.name} />}
       {toggles.some((t) => t.show) && (
         <div className="strike-opts">
           {toggles
@@ -241,14 +374,69 @@ export function AttacksTab({ character: c, state, canEdit, extras, canEditExtras
         const steps = [0, 1, 2].map((m) => strikeAttack(w, ctxFor(w), o, m));
         const dmg = strikeDamage(w, ctxFor(w), o);
         const sling = flags[weaponKey(w)]?.sling ?? guessSlinger(w);
+        const key = weaponKey(w);
+        const cw = customOf(w);
         return (
-          <div key={weaponKey(w)} className="weapon">
+          <div key={key} className={`weapon ${w.custom ? "custom" : ""}`}>
             <div className="weapon-head">
-              <b>{w.name}</b>
+              <EditableName className="weapon-name" value={w.name} canEdit={canEditExtras} onChange={(v) => rename(w, v)} />
+              {w.custom && <span className="badge">agregado</span>}
               <span className="muted small" title={dmg.notes || undefined}>
                 {dmg.formula} {w.damageType}
+                {w.pers ? ` · ${w.pers.f} persist.${w.pers.crit ? " (crít.)" : ""}` : ""}
               </span>
+              <button className={`w-cfg ${cfg === key ? "on" : ""}`} title="Daño persistente y más opciones" onClick={() => setCfg((k) => (k === key ? null : key))}>
+                ⚙
+              </button>
             </div>
+            {cfg === key && (
+              <div className="w-cfg-row">
+                {cw && (
+                  <>
+                    <label className="range" title="Bono de ataque">
+                      Ataque
+                      <input className="wide" defaultValue={fmtMod(cw.attack)} onBlur={(e) => {
+                        const v = parseInt(e.target.value.replace(/[^\d-]/g, ""), 10);
+                        if (Number.isFinite(v)) setCustom(cw.id, { attack: v });
+                      }} />
+                    </label>
+                    <label className="range" title="Daño">
+                      Daño
+                      <input className="wide" defaultValue={cw.dmg} onBlur={(e) => validFormula(e.target.value.trim()) && setCustom(cw.id, { dmg: e.target.value.trim() })} />
+                    </label>
+                    <label className="range" title="Tipo de daño">
+                      <input className="wide" list="pf2-damage-types" placeholder="tipo" defaultValue={cw.ty} onBlur={(e) => setCustom(cw.id, { ty: e.target.value.trim() })} />
+                    </label>
+                  </>
+                )}
+                <label className="range" title="Daño persistente que deja el golpe (1d6)">
+                  Persistente
+                  <input
+                    className="wide"
+                    placeholder="1d6"
+                    defaultValue={w.pers?.f}
+                    onBlur={(e) => {
+                      const f = e.target.value.trim();
+                      setFlag(w, { pers: f && validFormula(f) ? { ty: "", ...w.pers, f } : undefined });
+                    }}
+                  />
+                </label>
+                {w.pers && (
+                  <>
+                    <input className="wide" list="pf2-damage-types" placeholder="tipo (sangrado…)" defaultValue={w.pers.ty} onBlur={(e) => setFlag(w, { pers: { ...w.pers!, ty: e.target.value.trim() } })} />
+                    <button className={`chip ${w.pers.crit ? "on" : ""}`} title="Solo se aplica con un crítico (si no, siempre; con crítico se duplica)" onClick={() => setFlag(w, { pers: { ...w.pers!, crit: w.pers!.crit ? undefined : true } })}>
+                      Solo crítico
+                    </button>
+                  </>
+                )}
+                {cw && canEditExtras && (
+                  <button className="link-btn" onClick={() => updateExtras((x) => ({ ...x, weapons: (x.weapons ?? []).filter((y) => y.id !== cw.id) }))}>
+                    Quitar ataque
+                  </button>
+                )}
+                <DamageTypeList />
+              </div>
+            )}
             <div className="extras">
               {!w.bomb && (
                 <button className={`chip ${w.agile ? "on" : ""}`} onClick={() => setFlag(w, { agile: !w.agile })} title="Ágil: penalizador por ataque múltiple −4/−8">
@@ -263,6 +451,11 @@ export function AttacksTab({ character: c, state, canEdit, extras, canEditExtras
               {!w.bomb && (
                 <button className={`chip ${w.ranged ? "on" : ""}`} onClick={() => setFlag(w, { ranged: !w.ranged })} title="A distancia o cuerpo a cuerpo">
                   {w.ranged ? "A distancia" : "Cuerpo a cuerpo"}
+                </button>
+              )}
+              {w.ranged && !w.bomb && (
+                <button className={`chip ${w.thrown ? "on" : ""}`} onClick={() => setFlag(w, { thrown: !w.thrown })} title="Arrojadiza: el daño suma Fuerza, así que Débil lo penaliza">
+                  Arrojadiza
                 </button>
               )}
               {w.ranged && (
@@ -345,6 +538,7 @@ export function AttacksTab({ character: c, state, canEdit, extras, canEditExtras
           </div>
         );
       })}
+      {canEditExtras && <AddWeapon onAdd={(w) => updateExtras((x) => ({ ...x, weapons: [...(x.weapons ?? []), w] }))} />}
       {c.impulse && (
         <div className="weapon">
           <div className="weapon-head">

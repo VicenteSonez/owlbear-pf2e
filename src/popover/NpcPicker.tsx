@@ -23,7 +23,7 @@ export function useNpcOptions(): NpcOption[] {
           const state = npcState(t.data);
           return {
             tok: t.item.id,
-            name: npcLabel({ name: t.item.name || state.name, num: state.num }),
+            name: npcLabel({ name: t.item.name || state.name, num: state.num, nick: state.nick }),
             state,
             ac: effectiveAc(state.baseAc, state.acAdj, state.cond, state.shield).ac,
           };

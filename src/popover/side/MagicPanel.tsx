@@ -4,12 +4,13 @@ import { fmtMod, type SpellCaster } from "../../pathbuilder";
 import { live, petStateId, useLiveStates, type Resources } from "../../live";
 import { checkAdjust, modsText, stackMods, withBuff, type Mod } from "../../rules";
 import { SAVE_LABEL } from "../../shared";
-import type { SpellMeta } from "../../extras";
+import type { ExtraSpell, SpellMeta } from "../../extras";
+import { newId } from "../../shared";
+import { inventoryRows, type InvRow } from "./InventoryPanel";
 import { MAGIC_DESIGNS, defaultColor, traditionDesign, type MagicDesign } from "../../fx";
 import { featuresOf, fontSlots, highestRank, type ClassState } from "../../classes";
 import { useCombat } from "../../combat";
 import { inOwlbear } from "../../obr";
-import { store } from "../../storage";
 import { useActions } from "../ctx";
 import { NpcPicker, useNpcOptions } from "../NpcPicker";
 import { spellstrikeStep } from "../classActions";
@@ -20,6 +21,8 @@ import { SpellRow, metaOf } from "./SpellRow";
 import { DamageLauncher, setLastCast } from "./DamageLauncher";
 import { RunesPanel } from "./RunesPanel";
 import { FxColors } from "../FxColors";
+import { ThrallLinker } from "./ThrallLinker";
+import { selectedTokens, withThralls } from "../thralls";
 import type { FxKind } from "../../fx";
 
 const TYPE_LABEL: Record<string, string> = { prepared: "Preparado", spontaneous: "Espontáneo", focus: "Foco" };
@@ -56,6 +59,15 @@ const SPECIAL_LABEL: Record<Exclude<Special, null>, string> = {
   charge: "Un siervo suma 1d6 a su daño",
 };
 
+// Pergaminos del inventario: "Scroll of Fireball (Rank 3)" → conjuro y rango
+const SCROLL_RE = /^scroll of\s+/i;
+export const isScroll = (name: string) => SCROLL_RE.test(name.trim());
+const scrollSpell = (name: string) => name.trim().replace(SCROLL_RE, "").replace(/\s*\(.*\)\s*$/, "").trim();
+const scrollRankGuess = (name: string) => {
+  const m = /(?:rank|level|rango|nivel)\s*(\d+)/i.exec(name) ?? /\((\d+)(?:st|nd|rd|th|º)?\)/i.exec(name);
+  return m ? Math.max(1, Math.min(10, parseInt(m[1], 10))) : 1;
+};
+
 const BASE_IMPULSES: [string, SpellMeta][] = [
   ["Base Kinesis", { kind: "fx" }],
   ["Elemental Blast", { kind: "atk" }],
@@ -70,6 +82,12 @@ export function MagicPanel(props: SideProps) {
   const f = featuresOf(c);
   const [newRow, setNewRow] = useState<Record<string, string>>({});
   const [showColors, setShowColors] = useState(false);
+  // Create Thrall lanzado sin tokens seleccionados: se ofrece vincularlos o crearlos
+  const [thrallPrompt, setThrallPrompt] = useState(false);
+  // Pergamino esperando confirmación (se consume al usarlo)
+  const [confirmScroll, setConfirmScroll] = useState<string | null>(null);
+  const [newScroll, setNewScroll] = useState({ n: "", rank: "1" });
+  const [newSpell, setNewSpell] = useState({ n: "", rank: "1", uses: "1", caster: "" });
   const res: Resources = state?.res ?? {};
   const cls: ClassState = state?.cls ?? {};
   const prefs = extras.cls ?? {};
@@ -93,7 +111,8 @@ export function MagicPanel(props: SideProps) {
   // Ataque y CD de un lanzador con condiciones (y Vindicación contra la presa)
   const target = npcs.find((n) => n.tok === state?.target);
   const statsOf = (k?: SpellCaster, impulse = false) => {
-    const base = impulse ? c.impulse : k ? { attack: k.attack, dc: k.dc } : undefined;
+    // Sin lanzador (conjuro de un objeto en alguien que no lanza): la CD de clase
+    const base = impulse ? c.impulse : k ? { attack: k.attack, dc: k.dc } : { attack: c.classDc - 10, dc: c.classDc };
     if (!base) return { attack: 0, dc: 10, notes: undefined as string | undefined };
     const ctxA = impulse ? ({ kind: "impulse-attack" } as const) : ({ kind: "spell-attack", target: target ? `npc:${target.tok}` : undefined } as const);
     const ctxD = impulse ? ({ kind: "impulse-dc" } as const) : ({ kind: "spell-dc" } as const);
@@ -149,8 +168,9 @@ export function MagicPanel(props: SideProps) {
   const colorFor = (d: MagicDesign) => prefs.colors?.[d] ?? extras.magicFx?.color ?? defaultColor(d);
 
   // ---------- Lanzar ----------
-  const cast = async (name: string, rank: number, src: Src, k: SpellCaster | undefined, o: { amp?: boolean; defaults?: SpellMeta } = {}) => {
-    if (!name || !canEdit || !available(src)) return;
+  // Devuelve si se intentó lanzar (aunque se pierda por Estupefacto)
+  const cast = async (name: string, rank: number, src: Src, k: SpellCaster | undefined, o: { amp?: boolean; defaults?: SpellMeta; from?: string } = {}): Promise<boolean> => {
+    if (!name || !canEdit || !available(src)) return false;
     const meta = metaOf(extras, name, o.defaults);
     const kind = meta.kind ?? "fx";
     const ampText = o.amp ? " (amplificado)" : "";
@@ -161,11 +181,11 @@ export function MagicPanel(props: SideProps) {
     const stup = state?.cond.stupefied ?? 0;
     if (stup > 0) {
       const flat = await roll({ label: `${name}: prueba de Estupefacto`, formula: "1d20", kind: "flat", flat: { dc: 5 + stup, label: "Estupefacto" } });
-      if (!flat) return;
+      if (!flat) return false;
       if (flat.degree !== "success") {
         consume(src, o.amp);
-        await notify({ label: `${c.name} pierde ${name}`, detail: `Estupefacto ${stup}: falló la prueba plana CD ${5 + stup}`, tag: "Conjuro perdido" });
-        return;
+        await notify({ label: "Pierde el conjuro:", title: name, detail: `Estupefacto ${stup}: falló la prueba plana CD ${5 + stup}`, tag: "Conjuro perdido" });
+        return true;
       }
     }
     consume(src, o.amp);
@@ -178,6 +198,7 @@ export function MagicPanel(props: SideProps) {
 
     const ssSingle = !!cls.ss?.armed && (prefs.ssSingle ?? true);
     const detail = [
+      o.from ?? "",
       isImpulse ? `Nivel ${c.level}` : rank > 0 ? `Rango ${rank}` : "Truco",
       kind === "save" ? `Salvación de ${SAVE_LABEL[meta.save ?? "reflex"]}${meta.basic ? " básica" : ""} · CD ${stats.dc}` : kind === "atk" ? (ssSingle ? "Ataque con el Golpe de conjuro" : "Ataque") : "Efecto",
       meta.blood && f.bloodMagic ? "🩸 Magia de sangre" : "",
@@ -190,7 +211,8 @@ export function MagicPanel(props: SideProps) {
     let degree;
     if (kind === "atk" && !ssSingle) {
       const r = await roll({
-        label: `${c.name} lanza ${name}${ampText}`,
+        label: "Lanza (ataque de conjuro)",
+        title: `${name}${ampText}`,
         formula: `1d20${fmtMod(stats.attack)}`,
         kind: "check",
         notes: [detail, stats.notes].filter(Boolean).join(" · ") || undefined,
@@ -199,7 +221,7 @@ export function MagicPanel(props: SideProps) {
       });
       degree = r?.degree;
     } else {
-      await notify({ label: `${c.name} lanza ${name}${ampText}`, detail, tag: "Conjuro" });
+      await notify({ label: o.from ? `Lanza desde ${o.from.toLowerCase()}` : "Lanza", title: `${name}${ampText}`, detail, tag: "Conjuro" });
     }
     setLastCast(c.id, {
       name: `${name}${ampText}`,
@@ -230,21 +252,43 @@ export function MagicPanel(props: SideProps) {
     }
     if (sp === "thrall") await createThralls(design);
     if (sp === "charge") await chargeThrall();
+    return true;
   };
 
-  // Nigromante: los tokens seleccionados pasan a ser siervos
+  // ---------- Pergaminos ----------
+  const scrolls = inventoryRows(c, extras)
+    .map((r) => ({ ...r, name: extras.names?.[r.key] ?? r.name, qty: extras.qty?.[r.key] ?? r.qty }))
+    .filter((r) => isScroll(r.name) && r.qty > 0);
+  const scrollRank = (r: InvRow) => extras.srank?.[r.key] ?? scrollRankGuess(r.name);
+  // Usar un pergamino lo gasta: baja la cantidad o lo quita del inventario
+  const consumeScroll = (r: InvRow) =>
+    updateExtras((x) => {
+      const qty = (x.qty?.[r.key] ?? r.qty) - 1;
+      if (qty > 0) return { ...x, qty: setIn(x.qty, r.key, qty) };
+      if (r.added) return { ...x, added: (x.added ?? []).filter((a) => a.key !== r.key), qty: setIn(x.qty, r.key, undefined), srank: setIn(x.srank, r.key, undefined) };
+      return { ...x, gone: setIn(x.gone, r.key, true), qty: setIn(x.qty, r.key, undefined) };
+    });
+  const useScroll = async (r: InvRow) => {
+    setConfirmScroll(null);
+    const ok = await cast(scrollSpell(r.name), scrollRank(r), { kind: "free" }, mainCaster, { from: "Pergamino" });
+    if (ok) consumeScroll(r);
+  };
+
+  // ---------- Conjuros agregados a mano ----------
+  const xspells = extras.xspells ?? [];
+  const xCaster = (x: ExtraSpell) => c.casters.find((k) => k.name === x.caster) ?? mainCaster;
+  const xSrc = (x: ExtraSpell): Src => (x.uses > 0 ? { kind: "spont", key: `x:${x.id}`, total: x.uses } : { kind: "free" });
+
+  // Nigromante: los tokens seleccionados pasan a ser siervos; si no hay, se ofrece elegirlos o crearlos
+  const thrallMax = f.puppeteer ? 3 : 2;
   const createThralls = async (design: MagicDesign) => {
     if (!inOwlbear) return;
-    const max = f.puppeteer ? 3 : 2;
-    let ids = (await OBR.player.getSelection()) ?? [];
-    const last = store.lastSelection();
-    if (!ids.length && last && Date.now() - last.t < 120_000) ids = last.ids;
-    ids = ids.slice(0, max);
+    const ids = (await selectedTokens()).filter((id) => id !== state?.target).slice(0, thrallMax);
     if (!ids.length) {
-      OBR.notification.show(`Selecciona hasta ${max} tokens en el mapa para que sean tus siervos y vuelve a lanzar.`, "INFO");
+      setThrallPrompt(true);
       return;
     }
-    patchCls((x) => ({ ...x, thralls: [...(x.thralls ?? []).filter((t) => !ids.includes(t.tok)), ...ids.map((tok) => ({ tok }))] }));
+    patchCls((x) => withThralls(x, ids, thrallMax));
     for (const tok of ids) playFx({ kind: design, from: tok, color: colorFor(design) });
   };
   const chargeThrall = async () => {
@@ -300,14 +344,7 @@ export function MagicPanel(props: SideProps) {
       return { ...x, signature: { ...x.signature, [k.name]: next } };
     });
 
-  if (!c.casters.length && !f.kinetic && !f.runes) {
-    return (
-      <div className="side-panel">
-        <PanelHead title="Magia" />
-        <p className="muted">Este personaje no lanza conjuros.</p>
-      </div>
-    );
-  }
+  const noCasting = !c.casters.length && !f.kinetic && !f.runes;
 
   // Trucos de todos los lanzadores (preparados o del repertorio) + trucos de foco
   const cantrips = casters.flatMap((k) => {
@@ -413,6 +450,18 @@ export function MagicPanel(props: SideProps) {
           </div>
         );
       })}
+
+      {thrallPrompt && f.thrall && (
+        <ThrallLinker
+          {...props}
+          max={thrallMax}
+          color={colorFor(prefs.thrallFx ?? "void")}
+          prompt
+          onDone={() => setThrallPrompt(false)}
+        />
+      )}
+
+      {noCasting && <p className="muted small">Este personaje no lanza conjuros de clase: aquí están sus pergaminos y los conjuros que agregue (de objetos, dotes…), con su CD de clase.</p>}
 
       <DamageLauncher c={c} state={state} states={states} />
 
@@ -706,6 +755,178 @@ export function MagicPanel(props: SideProps) {
           )}
         </section>
       )}
+
+      <section className="spell-group scrolls">
+        <h3>
+          Pergaminos <span className="rank-tag">del inventario</span>
+        </h3>
+        {!scrolls.length && <p className="muted small">Los objetos “Scroll of…” del inventario aparecen aquí.</p>}
+        {scrolls.map((r) => {
+          const spell = scrollSpell(r.name);
+          const rank = scrollRank(r);
+          return (
+            <div key={r.key}>
+              <SpellRow
+                {...rowProps}
+                name={spell}
+                className="scroll"
+                lead={<span className="scroll-mark" title={r.name}>📜</span>}
+                actions={
+                  <>
+                    <select
+                      className="rank-select"
+                      value={rank}
+                      disabled={!canEditExtras}
+                      title="Rango del conjuro del pergamino"
+                      onChange={(e) => {
+                        const v = parseInt(e.target.value, 10);
+                        updateExtras((x) => ({ ...x, srank: setIn(x.srank, r.key, v) }));
+                      }}
+                    >
+                      {Array.from({ length: 10 }, (_, i) => (
+                        <option key={i + 1} value={i + 1}>
+                          R{i + 1}
+                        </option>
+                      ))}
+                    </select>
+                    {r.qty > 1 && <span className="badge">×{r.qty}</span>}
+                    <button className="btn small-btn cast-btn" disabled={!canEdit} onClick={() => setConfirmScroll(r.key)}>
+                      Usar
+                    </button>
+                  </>
+                }
+              />
+              {confirmScroll === r.key && (
+                <div className="confirm-row">
+                  <span>
+                    ¿Usar <b>{spell}</b>? El pergamino se consume{r.qty > 1 ? ` (quedan ${r.qty - 1})` : " y sale del inventario"}.
+                  </span>
+                  <button className="btn small-btn danger" onClick={() => useScroll(r)}>
+                    Sí, usar
+                  </button>
+                  <button className="btn small-btn ghost" onClick={() => setConfirmScroll(null)}>
+                    No
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {canEditExtras && (
+          <form
+            className="add-row slim"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const n = newScroll.n.trim();
+              if (!n) return;
+              const key = `inv+${Date.now().toString(36)}`;
+              const rank = parseInt(newScroll.rank, 10) || 1;
+              updateExtras((x) => ({ ...x, added: [...(x.added ?? []), { key, list: "inv", name: `Scroll of ${n}` }], srank: setIn(x.srank, key, rank) }));
+              setNewScroll({ n: "", rank: "1" });
+            }}
+          >
+            <input placeholder="+ Agregar pergamino (conjuro)…" value={newScroll.n} onChange={(e) => setNewScroll((v) => ({ ...v, n: e.target.value }))} />
+            <select value={newScroll.rank} title="Rango" onChange={(e) => setNewScroll((v) => ({ ...v, rank: e.target.value }))}>
+              {Array.from({ length: 10 }, (_, i) => (
+                <option key={i + 1} value={i + 1}>
+                  R{i + 1}
+                </option>
+              ))}
+            </select>
+            <button className="btn small-btn" disabled={!newScroll.n.trim()}>
+              +
+            </button>
+          </form>
+        )}
+      </section>
+
+      <section className="spell-group extra-spells">
+        <h3>
+          Conjuros adicionales <span className="rank-tag">innatos, de objetos…</span>
+        </h3>
+        {!xspells.length && <p className="muted small">Conjuros que no vienen en Pathbuilder (de un objeto, una dote…). Se lanzan con el ataque y la CD del lanzador que elijas.</p>}
+        {xspells.map((x) => {
+          const src = xSrc(x);
+          const k = xCaster(x);
+          const usedN = res.used?.[`x:${x.id}`] ?? 0;
+          return (
+            <SpellRow
+              key={x.id}
+              {...rowProps}
+              name={x.n}
+              className="extra-spell"
+              onRemove={() => updateExtras((e) => ({ ...e, xspells: (e.xspells ?? []).filter((y) => y.id !== x.id) }))}
+              lead={<span className="rank-tag">{x.rank ? `R${x.rank}` : "Truco"}</span>}
+              actions={
+                <>
+                  {x.uses > 0 ? (
+                    <IconPips
+                      value={Math.max(0, x.uses - usedN)}
+                      max={x.uses}
+                      icon={<IconSpark size={13} />}
+                      label="Usos disponibles"
+                      canEdit={canEdit}
+                      onChange={(v) => patchRes((r) => ({ ...r, used: setIn(r.used, `x:${x.id}`, x.uses - v || undefined) }))}
+                    />
+                  ) : (
+                    <span className="muted small" title="Sin límite de usos">a voluntad</span>
+                  )}
+                  {castBtn(x.n, x.rank, src, k)}
+                </>
+              }
+            />
+          );
+        })}
+        {canEditExtras && (
+          <form
+            className="add-row slim xs-form"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const n = newSpell.n.trim();
+              if (!n) return;
+              const spell: ExtraSpell = {
+                id: newId(),
+                n,
+                rank: Math.max(0, Math.min(10, parseInt(newSpell.rank, 10) || 0)),
+                uses: Math.max(0, Math.min(9, parseInt(newSpell.uses, 10) || 0)),
+                caster: newSpell.caster || undefined,
+              };
+              updateExtras((x) => ({ ...x, xspells: [...(x.xspells ?? []), spell] }));
+              setNewSpell({ n: "", rank: "1", uses: "1", caster: newSpell.caster });
+            }}
+          >
+            <input placeholder="+ Agregar conjuro…" value={newSpell.n} onChange={(e) => setNewSpell((v) => ({ ...v, n: e.target.value }))} />
+            <select value={newSpell.rank} title="Rango (0 = truco)" onChange={(e) => setNewSpell((v) => ({ ...v, rank: e.target.value }))}>
+              {Array.from({ length: 11 }, (_, i) => (
+                <option key={i} value={i}>
+                  {i ? `R${i}` : "Truco"}
+                </option>
+              ))}
+            </select>
+            <select value={newSpell.uses} title="Usos por día" onChange={(e) => setNewSpell((v) => ({ ...v, uses: e.target.value }))}>
+              <option value="0">A voluntad</option>
+              {[1, 2, 3, 4, 5].map((n) => (
+                <option key={n} value={n}>
+                  {n}/día
+                </option>
+              ))}
+            </select>
+            {c.casters.length > 0 && (
+              <select value={newSpell.caster} title="Ataque y CD de" onChange={(e) => setNewSpell((v) => ({ ...v, caster: e.target.value }))}>
+                <option value="">{mainCaster?.name ?? "Principal"}</option>
+                {c.casters.filter((k) => k !== mainCaster).map((k) => (
+                  <option key={k.name} value={k.name}>
+                    {k.name}
+                  </option>
+                ))}
+              </select>
+            )}
+            <button className="btn small-btn" disabled={!newSpell.n.trim()}>
+              +
+            </button>
+          </form>
+        )}
+      </section>
 
       {f.runes && <RunesPanel c={c} state={state} extras={extras} canEdit={canEdit} canEditExtras={canEditExtras} updateExtras={updateExtras} patch={patch} />}
     </div>
