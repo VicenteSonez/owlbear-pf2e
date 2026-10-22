@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import OBR, { type Item } from "@owlbear-rodeo/sdk";
 import type { Character } from "../pathbuilder";
 import { live, type PcState } from "../live";
-import { inOwlbear, patchNpc, unlinkToken } from "../obr";
+import { afterReady, inOwlbear, patchNpc, unlinkToken } from "../obr";
 import { DEATH_DYING, effectiveAc, effectiveMaxHp } from "../rules";
 import { META_TOKEN, hpColor, npcLabel, npcPlayerView, npcState, PLAYER_VIEW_LABEL, type NpcState, type TokenData } from "../shared";
 import { useSaveEffects } from "../requests";
@@ -98,14 +98,16 @@ export function GmView({ states, sheets, onOpenSheet, onUpload, onResolvePersist
   // Seleccionar un token en el mapa selecciona su personaje aquí
   useEffect(() => {
     if (!inOwlbear) return;
-    return OBR.player.onChange((p) => {
-      const ids = p.selection ?? [];
-      if (ids.length !== 1) return;
-      const t = tokens.find((x) => x.item.id === ids[0]);
-      if (!t) return;
-      if (t.data.kind === "pc" && t.data.characterId) setSel({ kind: "pc", id: t.data.characterId });
-      else if (t.data.kind === "npc") setSel({ kind: "npc", id: t.item.id });
-    });
+    return afterReady(() =>
+      OBR.player.onChange((p) => {
+        const ids = p.selection ?? [];
+        if (ids.length !== 1) return;
+        const t = tokens.find((x) => x.item.id === ids[0]);
+        if (!t) return;
+        if (t.data.kind === "pc" && t.data.characterId) setSel({ kind: "pc", id: t.data.characterId });
+        else if (t.data.kind === "npc") setSel({ kind: "npc", id: t.item.id });
+      }),
+    );
   }, [tokens]);
 
   let target: Target | null = null;
