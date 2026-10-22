@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import OBR, { type Item, type Player } from "@owlbear-rodeo/sdk";
-import { inOwlbear, roomId, tokenData, whenReady } from "../obr";
+import { afterReady, inOwlbear, roomId, tokenData, whenReady } from "../obr";
 import { store } from "../storage";
 import { CHANNEL_ROLL, META_PLAYER, visibleEntry, type PlayerMeta, type RollEntry, type TokenData } from "../shared";
 
@@ -49,8 +49,10 @@ export function useParty(enabled: boolean): Player[] {
   const [players, setPlayers] = useState<Player[]>([]);
   useEffect(() => {
     if (!enabled || !inOwlbear) return;
-    OBR.party.getPlayers().then(setPlayers);
-    return OBR.party.onChange(setPlayers);
+    return afterReady(() => {
+      OBR.party.getPlayers().then(setPlayers);
+      return OBR.party.onChange(setPlayers);
+    });
   }, [enabled]);
   return players;
 }
@@ -73,13 +75,18 @@ export function useLinkedToken(characterId: string | undefined): Item | undefine
       const items = await OBR.scene.items.getItems();
       if (alive) setToken(find(items));
     };
-    load();
-    const offItems = OBR.scene.items.onChange((items) => setToken(find(items)));
-    const offReady = OBR.scene.onReadyChange(() => load());
+    const off = afterReady(() => {
+      load();
+      const offItems = OBR.scene.items.onChange((items) => setToken(find(items)));
+      const offReady = OBR.scene.onReadyChange(() => load());
+      return () => {
+        offItems();
+        offReady();
+      };
+    });
     return () => {
       alive = false;
-      offItems();
-      offReady();
+      off();
     };
   }, [characterId]);
   return token;
@@ -139,13 +146,18 @@ export function useSceneTokens() {
       const items = await OBR.scene.items.getItems();
       if (alive) setTokens(pick(items));
     };
-    load();
-    const offItems = OBR.scene.items.onChange((items) => setTokens(pick(items)));
-    const offReady = OBR.scene.onReadyChange(() => load());
+    const off = afterReady(() => {
+      load();
+      const offItems = OBR.scene.items.onChange((items) => setTokens(pick(items)));
+      const offReady = OBR.scene.onReadyChange(() => load());
+      return () => {
+        offItems();
+        offReady();
+      };
+    });
     return () => {
       alive = false;
-      offItems();
-      offReady();
+      off();
     };
   }, []);
   return tokens;

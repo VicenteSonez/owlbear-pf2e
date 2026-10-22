@@ -2,7 +2,7 @@
 // creando siervos nuevos junto a su token. Aparece al lanzar Create Thrall y en la pestaña Mascota.
 import { useEffect, useState } from "react";
 import OBR from "@owlbear-rodeo/sdk";
-import { inOwlbear } from "../../obr";
+import { afterReady, inOwlbear } from "../../obr";
 import { useActions } from "../ctx";
 import { createThrallTokens, selectedTokens, withThralls } from "../thralls";
 import type { SideProps } from "./types";
@@ -16,8 +16,10 @@ export function ThrallLinker(props: SideProps & { max: number; color: string; pr
   // Cuántos tokens hay seleccionados ahora mismo en el mapa
   useEffect(() => {
     if (!inOwlbear) return;
-    OBR.player.getSelection().then((ids) => setSel(ids?.length ?? 0));
-    return OBR.player.onChange((p) => setSel(p.selection?.length ?? 0));
+    return afterReady(() => {
+      OBR.player.getSelection().then((ids) => setSel(ids?.length ?? 0));
+      return OBR.player.onChange((p) => setSel(p.selection?.length ?? 0));
+    });
   }, []);
 
   const link = (ids: string[]) => {

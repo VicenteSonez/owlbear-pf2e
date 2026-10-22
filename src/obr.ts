@@ -13,7 +13,21 @@ export function whenReady(): Promise<boolean> {
   });
 }
 
-export const roomId = () => (inOwlbear ? OBR.room.id : "local");
+// Las suscripciones de OBR (onChange, onMessage…) lanzan "not ready" si se llaman antes de que
+// Owlbear avise que está listo. Ejecuta `fn` cuando lo esté; devuelve la limpieza para un useEffect.
+export function afterReady(fn: () => (() => void) | void): () => void {
+  let alive = true;
+  let off: (() => void) | void;
+  whenReady().then((ok) => {
+    if (ok && alive) off = fn();
+  });
+  return () => {
+    alive = false;
+    off?.();
+  };
+}
+
+export const roomId =() => (inOwlbear ? OBR.room.id : "local");
 
 export const tokenData = (item: Item): TokenData | undefined =>
   item.metadata[META_TOKEN] as TokenData | undefined;
