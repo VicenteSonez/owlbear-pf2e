@@ -62,6 +62,7 @@ export function SpellRow(props: Props) {
         {name && (
           <button className={`spell-kind k-${kind}`} title="Configurar y describir" onClick={() => setOpen((o) => !o)}>
             {tag}
+            {meta.area ? " · área" : ""}
             {meta.desc ? " ·📝" : ""}
             {meta.blood ? " ·🩸" : ""}
           </button>
@@ -97,6 +98,9 @@ export function SpellRow(props: Props) {
             <input className="sm2" list="pf2-damage-types" placeholder="Tipo" defaultValue={meta.ty} disabled={!canEditExtras} onBlur={(e) => set({ ty: e.target.value.trim() || undefined })} />
             <label className="te-check" title="Cura en vez de dañar">
               <input type="checkbox" checked={!!meta.heal} disabled={!canEditExtras} onChange={(e) => set({ heal: e.target.checked })} /> Curación
+            </label>
+            <label className="te-check" title="De área: no pide prueba plana contra objetivos escondidos u ocultos (los de un solo objetivo sí)">
+              <input type="checkbox" checked={!!meta.area} disabled={!canEditExtras} onChange={(e) => set({ area: e.target.checked })} /> Área
             </label>
           </div>
           <div className="sf-row">

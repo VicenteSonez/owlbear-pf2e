@@ -10,6 +10,8 @@ export interface RollResult {
   total: number;
   degree?: Degree;
   nat?: 1 | 20;
+  // Subtotal de la fórmula principal y de cada grupo aparte (RollRequest.extra), en orden
+  parts?: number[];
 }
 
 export interface NoteRequest {

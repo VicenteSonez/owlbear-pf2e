@@ -4,13 +4,20 @@ import { useState } from "react";
 import { fmtMod, type Character } from "../pathbuilder";
 import type { PcState } from "../live";
 import type { ClassPrefs, Extras } from "../extras";
-import { DEGREE_LABEL, checkAdjust, levelDc, withBuff, type Degree } from "../rules";
+import { DEGREE_LABEL, checkAdjust, levelDc, withBuff, withoutBuff, type Degree } from "../rules";
 import {
   HUNTER_EDGE_LABEL,
+  IKONS,
+  IKON_SLOT_LABEL,
   IMPLEMENTS,
   IMPLEMENT_KIND_LABEL,
+  elixirOfLife,
   etchMax,
   featuresOf,
+  findIkon,
+  findImplement,
+  hornMax,
+  ikonSpeed,
   overdriveBonus,
   panacheSpeed,
   panacheSpeedIdle,
@@ -21,7 +28,11 @@ import {
 import { defaultColor, type FxKind, type MagicDesign } from "../fx";
 import { useCombat } from "../combat";
 import { randomDie } from "../dice";
-import { dealDamage } from "../damage";
+import { dealDamage, healTarget } from "../damage";
+import { live, useLiveStates } from "../live";
+import { newId } from "../shared";
+import { saveEffects, type SaveEffect } from "../requests";
+import { customWeapon } from "../strike";
 import { NpcPicker, useNpcOptions } from "./NpcPicker";
 import { useActions } from "./ctx";
 import { runeLabel } from "./side/RunesPanel";
@@ -51,6 +62,11 @@ export function classSpeed(c: Character, s?: PcState) {
     value += extra;
     notes.push(`+${extra} por Panache`);
   }
+  const sandals = ikonSpeed(s);
+  if (sandals) {
+    value += sandals;
+    notes.push(`+${sandals} por las Sandalias de mil leguas`);
+  }
   return { value, notes: notes.join(", ") };
 }
 
@@ -66,6 +82,8 @@ export function ClassBar({ character: c, state, extras, canEdit, canEditExtras, 
   const [other, setOther] = useState("");
   const [invokeSel, setInvokeSel] = useState<string[]>([]);
   const [newImpl, setNewImpl] = useState("");
+  const [hornAlly, setHornAlly] = useState("");
+  const { states: liveStates } = useLiveStates();
   const cls: ClassState = state?.cls ?? {};
   const prefs: ClassPrefs = extras.cls ?? {};
   const me = `pc:${c.id}`;
@@ -233,12 +251,63 @@ export function ClassBar({ character: c, state, extras, canEdit, canEditExtras, 
     }
   };
 
+  // Íconos que se comparten (Égida reflejada, Corona del vencedor): bono temporal en ti y en
+  // los aliados elegidos; al mover la chispa se quita de todos
+  const syncIkonBuffs = async (spark: string | undefined, share: string[]) => {
+    const ik = findIkon(spark);
+    const id = `ikon-${c.id}`;
+    const buff = ik?.id === "aegis" ? { id, n: ik.n, ty: "status" as const, ac: 1 } : ik?.id === "wreath" ? { id, n: ik.n, ty: "status" as const, atk: 1 } : null;
+    for (const s of Object.values(live.all())) {
+      if (s.pet) continue;
+      const want = !!buff && (s.id === c.id || share.includes(s.id));
+      const has = (s.cond.buffs ?? []).some((b) => b.id === id);
+      if (want) await live.patch(s.id, (x) => ({ ...x, cond: withBuff(x.cond, buff!) }));
+      else if (has) await live.patch(s.id, (x) => ({ ...x, cond: withoutBuff(x.cond, id) }));
+    }
+  };
+
   const setSpark = (ikon?: string, transcend = false) => {
-    patchCls((k) => ({ ...k, spark: ikon }));
+    patchCls((k) => ({ ...k, spark: ikon, sparkOpt: ikon === k.spark ? k.sparkOpt : undefined }));
+    syncIkonBuffs(ikon, cls.share ?? []);
     playFx({ kind: "divine", from: me, color: color("divine") });
     if (transcend) notify({ label: "Trasciende con su chispa divina:", title: cls.spark, tag: "Trascendencia" });
-    else if (ikon) notify({ label: "Chispa divina inmanente en:", title: ikon, tag: "Inmanencia" });
+    else if (ikon) notify({ label: "Chispa divina inmanente en:", title: ikon, detail: findIkon(ikon)?.desc, tag: "Inmanencia" });
     else notify({ label: "Apaga su", title: "Chispa divina", tag: "Chispa" });
+  };
+
+  const toggleShare = (id: string) => {
+    const cur = cls.share ?? [];
+    const next = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id];
+    patchCls((k) => ({ ...k, share: next.length ? next : undefined }));
+    syncIkonBuffs(cls.spark, next);
+  };
+
+  // Brazaletes atrayentes: salvación de Voluntad contra tu CD de clase
+  const fetchBangles = async (tok: string) => {
+    const target = npcs.find((n) => n.tok === tok);
+    if (!target) return;
+    const dc = c.classDc + checkAdjust(state?.cond, { kind: "class-dc" }).total;
+    const eff: SaveEffect = { id: newId(), name: "Fetching Bangles", save: "will", dc, from: c.id, fromName: c.name, targets: [{ k: `npc:${tok}`, n: target.name }], t: Date.now() };
+    await saveEffects.set(eff.id, eff);
+    playFx({ kind: "divine", from: tok, color: color("divine") });
+    await notify({ label: "Salvación de Voluntad:", title: "Fetching Bangles", detail: target.name, tag: "Inmanencia" });
+  };
+
+  // Cuerno de la abundancia: crea el consumible y lo usa en un aliado
+  const useHorn = async (allyId: string, custom: boolean) => {
+    const used = cls.horn ?? 0;
+    if (used >= hornMax(c.level)) return;
+    const ally = live.get(allyId);
+    const item = custom ? prefs.hornCustom : elixirOfLife(c.level);
+    if (!item?.n) return;
+    patchCls((k) => ({ ...k, horn: (k.horn ?? 0) + 1 }));
+    playFx({ kind: "vital", from: `pc:${allyId}`, color: color("vital") });
+    if (item.f) {
+      const r = await roll({ label: `Cuerno de la abundancia → ${ally?.name ?? ""}`, title: item.n, formula: item.f, kind: "damage", tag: "Curación" });
+      if (r) await healTarget({ kind: "pc", id: allyId }, r.total);
+    } else {
+      await notify({ label: `Cuerno de la abundancia → ${ally?.name ?? ""}`, title: item.n, tag: "Inmanencia" });
+    }
   };
 
   const setCurse = (v: number) => {
@@ -396,7 +465,7 @@ export function ClassBar({ character: c, state, extras, canEdit, canEditExtras, 
             {f.empower && (
               <label className="te-check">
                 <input type="checkbox" checked={prefs.empower ?? true} disabled={!canEditExtras} onChange={(e) => setPrefs((p) => ({ ...p, empower: e.target.checked }))} />
-                Potenciación del implemento (+2 al daño de armas)
+                Potenciación del implemento (+2 por dado de daño del arma)
               </label>
             )}
           </>
@@ -451,7 +520,7 @@ export function ClassBar({ character: c, state, extras, canEdit, canEditExtras, 
                   e.preventDefault();
                   const v = newImpl.trim();
                   if (!v) return;
-                  const known = IMPLEMENTS.find((x) => x.n.toLowerCase() === v.toLowerCase());
+                  const known = findImplement(v);
                   setPrefs((p) => ({ ...p, implements: [...(p.implements ?? []), { n: known?.n ?? v, kind: known?.kind ?? "a1", note: known?.desc }] }));
                   setNewImpl("");
                 }}
@@ -459,7 +528,9 @@ export function ClassBar({ character: c, state, extras, canEdit, canEditExtras, 
                 <input className="sm2" list="pf2-implements" placeholder="Nuevo implemento…" value={newImpl} onChange={(e) => setNewImpl(e.target.value)} />
                 <datalist id="pf2-implements">
                   {IMPLEMENTS.map((x) => (
-                    <option key={x.n} value={x.n} />
+                    <option key={x.n} value={x.n}>
+                      {x.es} · {IMPLEMENT_KIND_LABEL[x.kind]}
+                    </option>
                   ))}
                 </datalist>
                 <button className="btn small-btn">+</button>
@@ -577,25 +648,143 @@ export function ClassBar({ character: c, state, extras, canEdit, canEditExtras, 
         );
       case "spark": {
         const ikons = prefs.ikons ?? [];
+        const ik = findIkon(cls.spark);
+        const opts = (cls.sparkOpt ?? "").split(",").filter(Boolean);
+        const weapons = [...c.weapons, ...(extras.weapons ?? []).map(customWeapon)];
+        const wpnKey = ik ? prefs.ikonWpn?.[ik.n] : undefined;
+        const allies = Object.values(liveStates).filter((s) => !s.pet && s.id !== c.id);
+        const hornLeft = hornMax(c.level) - (cls.horn ?? 0);
         return (
           <>
             <div className="cb-row">
-              {ikons.map((ik) => (
-                <button key={ik} className={`chip ${cls.spark === ik ? "on" : ""}`} disabled={!canEdit} onClick={() => setSpark(ik)} title={cls.spark ? "Transferir la chispa" : "Inmanencia"}>
-                  {ik}
-                </button>
-              ))}
+              {ikons.map((name) => {
+                const def = findIkon(name);
+                return (
+                  <button key={name} className={`chip ${cls.spark === name ? "on" : ""}`} disabled={!canEdit} onClick={() => setSpark(name)} title={def ? `${IKON_SLOT_LABEL[def.slot]}: ${def.desc}` : cls.spark ? "Transferir la chispa" : "Inmanencia"}>
+                    {name}
+                  </button>
+                );
+              })}
               {!ikons.length && <span className="muted small">Agrega tus íconos abajo.</span>}
             </div>
             <ColorPick k="divine" />
             {cls.spark && (
-              <div className="cb-row">
-                <button className="btn small-btn" onClick={() => setSpark(undefined, true)}>
-                  Trascender
-                </button>
-                <button className="btn ghost small-btn" onClick={() => setSpark(undefined)}>
-                  Apagar chispa
-                </button>
+              <div className="ikon-box">
+                <div className="cb-row">
+                  <b>{cls.spark}</b>
+                  {ik && <span className="badge">{IKON_SLOT_LABEL[ik.slot]}</span>}
+                </div>
+                {ik ? <p className="muted small">Inmanencia: {ik.desc}</p> : <p className="muted small">Ícono sin automatizar: su efecto se aplica a mano.</p>}
+                {ik?.dmg && (
+                  <div className="cb-row">
+                    <span className="muted small">Arma del ícono</span>
+                    <select
+                      value={wpnKey ?? ""}
+                      disabled={!canEditExtras}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setPrefs((p) => ({ ...p, ikonWpn: { ...p.ikonWpn, [ik.n]: v } }));
+                      }}
+                    >
+                      <option value="">— Elegir ataque —</option>
+                      {weapons
+                        .filter((w) => (ik.slot === "ranged" ? w.ranged : ik.slot === "melee" ? !w.ranged : true))
+                        .map((w) => (
+                          <option key={w.key} value={w.key}>
+                            {w.name}
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+                )}
+                {ik?.opts && (
+                  <div className="cb-row">
+                    {ik.opts.map((o) => {
+                      const on = opts.includes(o.id);
+                      return (
+                        <button
+                          key={o.id}
+                          className={`chip ${on ? "on" : ""}`}
+                          disabled={!canEdit}
+                          onClick={() => {
+                            const next = ik.multi ? (on ? opts.filter((x) => x !== o.id) : [...opts, o.id]) : on ? [] : [o.id];
+                            patchCls((k) => ({ ...k, sparkOpt: next.join(",") || undefined }));
+                          }}
+                        >
+                          {o.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+                {ik?.share && (
+                  <div className="cb-row">
+                    <span className="muted small">Compartir con</span>
+                    {allies.map((s) => (
+                      <button key={s.id} className={`chip ${(cls.share ?? []).includes(s.id) ? "on" : ""}`} disabled={!canEdit} onClick={() => toggleShare(s.id)}>
+                        {s.name}
+                      </button>
+                    ))}
+                    {!allies.length && <span className="muted small">No hay más PJ en la sala.</span>}
+                  </div>
+                )}
+                {ik?.id === "aegis" && (
+                  <div className="cb-row">
+                    <button className="btn small-btn" disabled={!canEdit || !state?.shield} onClick={() => onPatch((s) => (s.shield ? { ...s, shield: { ...s.shield, hp: s.shield.maxHp } } : s))}>
+                      🛡 Reparar escudo
+                    </button>
+                    {!state?.shield && <span className="muted small">No tienes escudo en la hoja.</span>}
+                  </div>
+                )}
+                {ik?.id === "bangles" && (
+                  <div className="cb-row">
+                    <NpcPicker value={undefined} onChange={(tok) => tok && fetchBangles(tok)} placeholder="Elegir enemigo (Voluntad vs CD de clase)" disabled={!canEdit} />
+                  </div>
+                )}
+                {ik?.id === "horn" && (
+                  <>
+                    <div className="cb-row">
+                      <span>
+                        Consumibles hoy: <b>{Math.max(0, hornLeft)}</b>/{hornMax(c.level)}
+                      </span>
+                      <button className="link-btn" disabled={!canEdit} onClick={() => patchCls((k) => ({ ...k, horn: undefined }))}>
+                        ↻ Recuperar
+                      </button>
+                    </div>
+                    <div className="cb-row">
+                      <select value={hornAlly} onChange={(e) => setHornAlly(e.target.value)} title="Quién lo bebe">
+                        {[...(state ? [state] : []), ...allies].map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.id === c.id ? `${s.name} (tú)` : s.name}
+                          </option>
+                        ))}
+                      </select>
+                      <button className="btn small-btn" disabled={!canEdit || hornLeft <= 0} onClick={() => useHorn(hornAlly || c.id, false)} title={elixirOfLife(c.level).f}>
+                        {elixirOfLife(c.level).n} ({elixirOfLife(c.level).f})
+                      </button>
+                      {prefs.hornCustom?.n && (
+                        <button className="btn small-btn" disabled={!canEdit || hornLeft <= 0} onClick={() => useHorn(hornAlly || c.id, true)}>
+                          {prefs.hornCustom.n}
+                          {prefs.hornCustom.f ? ` (${prefs.hornCustom.f})` : ""}
+                        </button>
+                      )}
+                    </div>
+                    {canEditExtras && (
+                      <div className="cb-row">
+                        <input className="sm2" placeholder="Consumible personalizado…" defaultValue={prefs.hornCustom?.n} onBlur={(e) => setPrefs((p) => ({ ...p, hornCustom: { ...p.hornCustom, n: e.target.value.trim() } }))} />
+                        <input className="sm2" placeholder="Curación (2d8)" defaultValue={prefs.hornCustom?.f} onBlur={(e) => setPrefs((p) => ({ ...p, hornCustom: { n: p.hornCustom?.n ?? "", f: e.target.value.trim() || undefined } }))} />
+                      </div>
+                    )}
+                  </>
+                )}
+                <div className="cb-row">
+                  <button className="btn small-btn" onClick={() => setSpark(undefined, true)}>
+                    Trascender
+                  </button>
+                  <button className="btn ghost small-btn" onClick={() => setSpark(undefined)}>
+                    Apagar chispa
+                  </button>
+                </div>
               </div>
             )}
             {canEditExtras && (
@@ -604,12 +793,21 @@ export function ClassBar({ character: c, state, extras, canEdit, canEditExtras, 
                 onSubmit={(e) => {
                   e.preventDefault();
                   const input = (e.target as HTMLFormElement).elements.namedItem("ikon") as HTMLInputElement;
-                  const v = input.value.trim();
+                  const raw = input.value.trim();
+                  // Los del catálogo se guardan con su nombre exacto (así se automatizan)
+                  const v = findIkon(raw)?.n ?? raw;
                   if (v) setPrefs((p) => ({ ...p, ikons: [...(p.ikons ?? []).filter((x) => x !== v), v] }));
                   input.value = "";
                 }}
               >
-                <input name="ikon" className="sm2" placeholder="Nuevo ícono…" />
+                <input name="ikon" className="sm2" list="pf2-ikons" placeholder="Nuevo ícono…" />
+                <datalist id="pf2-ikons">
+                  {IKONS.map((x) => (
+                    <option key={x.id} value={x.n}>
+                      {IKON_SLOT_LABEL[x.slot]}
+                    </option>
+                  ))}
+                </datalist>
                 <button className="btn small-btn">+</button>
                 {ikons.length > 0 && (
                   <select value="" onChange={(e) => e.target.value && setPrefs((p) => ({ ...p, ikons: (p.ikons ?? []).filter((x) => x !== e.target.value) }))}>

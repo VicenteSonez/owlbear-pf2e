@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import OBR from "@owlbear-rodeo/sdk";
 import { fmtMod, parsePathbuilder, type Character } from "../pathbuilder";
-import { Dice3D, evaluate, parseFormula, randomValues, type DiceStyle } from "../dice";
+import { Dice3D, evaluate, parseFormula, randomValues, type DiceStyle, type Formula } from "../dice";
 import { autoLinkCandidate, inOwlbear, linkToken, publishPlayer, renameToken, unlinkToken } from "../obr";
 import { store } from "../storage";
 import { live, needsSheetSync, seedState, syncSheet, useLiveStates, type PcState } from "../live";
-import { DEGREE_LABEL, applyRecovery, degreeOf, type Degree } from "../rules";
+import { DEGREE_LABEL, applyRecovery, degreeOf, recoveryDc, type Degree } from "../rules";
 import { CHANNEL_FX, newId, npcState, type NpcState, type RollEntry } from "../shared";
 import { ActionsContext, type Actions, type NoteRequest, type RollResult } from "./ctx";
 import { combatEntries, pcKey, useCombat } from "../combat";
@@ -31,6 +31,7 @@ import { InventoryPanel } from "./side/InventoryPanel";
 import { MagicPanel } from "./side/MagicPanel";
 import { RecipesPanel } from "./side/RecipesPanel";
 import { PetPanel } from "./side/PetPanel";
+import { HealPanel } from "./side/HealPanel";
 import { ClassBar } from "./ClassBar";
 import { PendingSaves } from "./SavesPanel";
 import type { SideProps } from "./side/types";
@@ -48,6 +49,9 @@ export interface RollRequest {
   formula: string;
   kind: RollEntry["kind"];
   crit?: boolean;
+  // Grupos que se tiran junto a la fórmula: otro tipo de daño, lo que solo da el crítico
+  // (mult: false, no se duplica) o la salpicadura. El resultado trae el subtotal de cada uno.
+  extra?: { f: string; mult: boolean }[];
   // Condiciones que modifican la tirada, para mostrarlas junto al resultado
   notes?: string;
   flat?: FlatRequest;
@@ -332,12 +336,16 @@ export function App() {
       let formula = req.formula;
       if (req.kind === "check" && extra) formula += fmtMod(extra);
       let f;
+      let groups: Formula[];
       try {
         f = parseFormula(formula);
+        groups = (req.extra ?? []).map((g) => parseFormula(g.f));
       } catch (err) {
         if (inOwlbear) OBR.notification.show(String((err as Error).message), "ERROR");
         return;
       }
+      // Todos los dados ruedan juntos; después cada grupo se suma por su cuenta
+      const all: Formula = { dice: [...f.dice, ...groups.flatMap((g) => g.dice)], flat: 0 };
       busy.current = true;
       // Un jugador no ve su tirada secreta: ni animación ni resultado
       const isSecret = (secret || !!req.secret) && !opts.preview;
@@ -350,9 +358,22 @@ export function App() {
       setCurrent({ label: shownLabel, formula, rolling: true, secret: isSecret });
       if (!hideFromMe) showOverlay({ phase: "rolling", key, label: shownLabel });
       try {
-        const values = hideFromMe ? randomValues(f) : await dice.roll(f);
-        const out = evaluate(f, values, { crit: req.crit, check: req.kind !== "damage" });
-        const shownFormula = req.crit ? `2×(${formula})` : formula;
+        const rolled = hideFromMe ? randomValues(all) : await dice.roll(all);
+        const values = rolled.slice(0, f.dice.length);
+        const main = evaluate(f, values, { crit: req.crit, check: req.kind !== "damage" });
+        let at = f.dice.length;
+        const extras = groups.map((g, i) => {
+          const vals = rolled.slice(at, at + g.dice.length);
+          at += g.dice.length;
+          return evaluate(g, vals, { crit: req.crit && req.extra![i].mult });
+        });
+        const out = {
+          ...main,
+          total: main.total + extras.reduce((a, e) => a + e.total, 0),
+          detail: [main.detail, ...extras.map((e) => e.detail)].join(" + "),
+        };
+        const parts = [main.total, ...extras.map((e) => e.total)];
+        const shownFormula = [req.crit ? `2×(${formula})` : formula, ...(req.extra ?? []).map((g) => (req.crit && g.mult ? `2×(${g.f})` : g.f))].join(" + ");
         let degree: Degree | undefined;
         const d20 = f.dice[0]?.sides === 20 && f.dice[0].count === 1 ? values[0]?.[0] : undefined;
         if (req.flat) {
@@ -390,7 +411,7 @@ export function App() {
                 rolling: false,
               },
         );
-        if (opts.preview) return { total: out.total, degree, nat: out.nat };
+        if (opts.preview) return { total: out.total, degree, nat: out.nat, parts };
         const entry: RollEntry = {
           id: newId(),
           time: Date.now(),
@@ -417,7 +438,7 @@ export function App() {
         await publish(entry);
         // La tirada de recuperación cambia moribundo según el resultado
         if (req.flat?.recovery && degree && rollingFor) await live.patch(rollingFor, (s) => applyRecovery(s, degree!));
-        return { total: out.total, degree, nat: out.nat };
+        return { total: out.total, degree, nat: out.nat, parts };
       } finally {
         busy.current = false;
       }
@@ -630,6 +651,7 @@ export function App() {
                 {side === "magic" && <MagicPanel {...sp} />}
                 {side === "recipes" && <RecipesPanel {...sp} />}
                 {side === "pet" && <PetPanel {...sp} onRoll={roll} />}
+                {side === "heal" && <HealPanel {...sp} />}
               </div>
             );
           })()}
@@ -683,6 +705,7 @@ export function App() {
                 <FlatChecks
                   stupefied={state?.cond.stupefied ?? 0}
                   dying={state?.dying ?? 0}
+                  recDc={state ? recoveryDc(state) : 10}
                   onFlat={flatRoll}
                   onClose={() => setMenu(null)}
                 />

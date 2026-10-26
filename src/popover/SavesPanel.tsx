@@ -2,7 +2,8 @@ import { useMemo, useState } from "react";
 import { fmtMod, type Character } from "../pathbuilder";
 import type { PcState } from "../live";
 import { extrasStore } from "../extras";
-import { DEGREE_LABEL, checkAdjust, levelDc, modsText } from "../rules";
+import { DEGREE_LABEL, checkAdjust, levelDc, modsText, stackMods } from "../rules";
+import { ikonCheckMods } from "../classes";
 import { SAVE_LABEL, newId, npcLabel, type SaveKey } from "../shared";
 import {
   removeSaveEffect,
@@ -219,8 +220,11 @@ export function SaveEffectsList(props: {
     setBusy(true);
     try {
       const mod = saveModFor(t.k, e.save, props.sheets, props.states, npcs);
-      const cond = t.k.startsWith("pc:") ? props.states[t.k.slice(3)]?.cond : npcs[t.k.slice(4)]?.cond;
-      const adj = checkAdjust(cond, { kind: "save", key: e.save, fear: e.fear });
+      const pc = t.k.startsWith("pc:") ? props.states[t.k.slice(3)] : undefined;
+      const cond = pc ? pc.cond : npcs[t.k.slice(4)]?.cond;
+      const ctx = { kind: "save", key: e.save, fear: e.fear } as const;
+      // Los íconos del ejemplar con la chispa inmanente también dan bonos a salvaciones
+      const adj = stackMods([...checkAdjust(cond, ctx).applied, ...ikonCheckMods(pc, ctx)]);
       const base = mod ?? 0;
       const label = `${e.name}: ${SAVE_LABEL[e.save]}`;
       const hiddenNpc = t.k.startsWith("npc:") && npcs[t.k.slice(4)]?.hidden;

@@ -3,7 +3,8 @@
 import OBR from "@owlbear-rodeo/sdk";
 import { live, type PcState } from "./live";
 import { inOwlbear, patchNpc, tokenData } from "./obr";
-import { applyDamage, applyHealing, applyRecovery, effectiveMaxHp, expireBuffs, DEATH_DYING, type Conditions } from "./rules";
+import { applyDamage, applyHealing, applyRecovery, autoIwr, deathAt, effectiveMaxHp, expireBuffs, recoveryDc, resolveIwr, type Conditions } from "./rules";
+import { readTarget } from "./damage";
 import { META_TOKEN, newId, npcState, type NpcState, type RollEntry, type TokenData } from "./shared";
 import { autoRecovery, resolvePersistent, type Roller } from "./autoRoll";
 import type { Entry } from "./combat";
@@ -43,17 +44,22 @@ function patchTarget(t: TurnTarget, fn: (v: { hp: number; temp: number; dying: n
   });
 }
 
-// Daño persistente: tira cada daño y luego la prueba plana CD 15 para terminarlo
+// Daño persistente: tira cada daño (con las resistencias del objetivo) y luego la prueba plana
+// para terminarlo (CD 15, menos con asistencia o dotes; la asistencia se gasta)
 export async function applyPersistent(t: TurnTarget, who: Roller, publish: Publish) {
   const list = t.state.cond?.persistent ?? [];
   if (!list.length) return;
-  const { damage, ended, entries } = resolvePersistent(who, t.state.name, list);
+  const aid = t.kind === "pc" ? t.state.aid : undefined;
+  const { parts, ended, entries } = resolvePersistent(who, t.state.name, list, aid);
   const send = publishAs(t, publish);
   for (const e of entries) await send(e);
+  const info = await readTarget(t.kind === "pc" ? { kind: "pc", id: t.state.id } : { kind: "npc", tokenId: t.tokenId });
+  const damage = parts.reduce((sum, p) => sum + resolveIwr(p.amt, info?.iwr, autoIwr(info?.iwr, p.ty)).total, 0);
   await patchTarget(t, (v) => ({
     ...applyDamage(v, damage),
     cond: { ...v.cond, persistent: (v.cond.persistent ?? []).filter((p) => !ended.includes(p.id)) },
   }));
+  if (aid?.assist && t.kind === "pc") await live.patch(t.state.id, (s) => ({ ...s, aid: { ...s.aid, assist: undefined } }));
 }
 
 // Claves con las que se marca el vencimiento de un bono: la del combate y la del token o PJ
@@ -135,7 +141,7 @@ export async function startOfTurn(e: Entry, who: Roller, publish: Publish) {
   if (!t) return;
   const send = publishAs(t, publish);
   const fh = t.state.cond.fastHealing ?? 0;
-  const dead = t.kind === "pc" && t.state.dying >= DEATH_DYING;
+  const dead = t.kind === "pc" && t.state.dying >= deathAt(t.state);
   if (fh > 0 && !dead) {
     await send({
       id: newId(),
@@ -158,8 +164,8 @@ export async function startOfTurn(e: Entry, who: Roller, publish: Publish) {
   const s = live.get(t.state.id);
   if (!s) return;
   if (s.shield?.raised) await live.patch(s.id, (x) => (x.shield ? { ...x, shield: { ...x.shield, raised: false } } : x));
-  if (s.dying > 0 && s.dying < DEATH_DYING) {
-    const r = autoRecovery(who, s.name, s.dying);
+  if (s.dying > 0 && s.dying < deathAt(s)) {
+    const r = autoRecovery(who, s.name, recoveryDc(s));
     await send(r);
     await live.patch(s.id, (x) => applyRecovery(x, r.degree));
   }

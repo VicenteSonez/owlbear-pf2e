@@ -79,6 +79,29 @@ export function persistentByType(list: PersistentDamage[] | undefined): { top: P
   return [...groups.values()].map((g) => ({ top: g.reduce((a, b) => (persistentAvg(b) > persistentAvg(a) ? b : a)), ids: g.map((x) => x.id) }));
 }
 
+// Ayudas contra el daño persistente: Asistencia (CD 10 en la próxima prueba) y mejoras de
+// dotes para un tipo ("" = todos) con su CD normal y con asistencia
+export interface PersImprovement {
+  ty: string;
+  dc: number;
+  adc: number;
+}
+
+export interface PersAid {
+  assist?: boolean;
+  imp?: PersImprovement[];
+}
+
+// CD de la prueba plana para terminar un daño persistente de este tipo (la menor que aplique)
+export function persistentFlatDc(type: string, aid: PersAid | undefined): number {
+  let dc = aid?.assist ? 10 : 15;
+  for (const m of aid?.imp ?? []) {
+    if (m.ty.trim() && !iwrMatches(m.ty, type)) continue;
+    dc = Math.min(dc, aid?.assist ? m.adc : m.dc);
+  }
+  return dc;
+}
+
 // Bono o penalizador temporal que otro aplica (Himno valeroso, Provocar…). Se apaga solo
 // al empezar o terminar el turno de quien lo dio ("pc:<id>" o "npc:<id>").
 export interface Buff {
@@ -99,6 +122,13 @@ export interface Buff {
 export interface Conditions {
   offGuard?: boolean;
   fatigued?: boolean;
+  // Oculto (CD 5 para elegirlo de objetivo) e invisible (escondido de todos): absolutos
+  concealed?: boolean;
+  invisible?: boolean;
+  // Escondido (CD 11): relativo. hidFrom = claves ("pc:<id>", "npc:<token>") de quienes no lo
+  // ven; sin lista, de todos. Al jugador solo se le muestra "Escondido" (el GM sabe de quién).
+  hidden?: boolean;
+  hidFrom?: string[];
   frightened?: number;
   sickened?: number;
   enfeebled?: number;
@@ -114,8 +144,10 @@ export interface Conditions {
 
 export type ValuedCondition = "frightened" | "sickened" | "enfeebled" | "clumsy" | "stupefied" | "drained" | "fastHealing";
 
+export type ToggleCondition = "offGuard" | "fatigued" | "concealed" | "hidden" | "invisible";
+
 export interface ConditionDef {
-  id: "offGuard" | "fatigued" | ValuedCondition;
+  id: ToggleCondition | ValuedCondition;
   label: string;
   icon: string;
   valued: boolean;
@@ -125,6 +157,15 @@ export interface ConditionDef {
 export const CONDITIONS: ConditionDef[] = [
   { id: "offGuard", label: "Desprevenido", icon: "off-guard", valued: false, desc: "−2 circunstancial a la CA." },
   { id: "fatigued", label: "Fatigado", icon: "fatigued", valued: false, desc: "−1 de estado a la CA y a las salvaciones. No puede entrar en Furia." },
+  { id: "concealed", label: "Oculto", icon: "concealed", valued: false, desc: "Quien lo elija de objetivo hace antes una prueba plana CD 5: con un fallo, falla." },
+  {
+    id: "hidden",
+    label: "Escondido",
+    icon: "hidden",
+    valued: false,
+    desc: "Prueba plana CD 11 para elegirlo de objetivo. Sus ataques encuentran desprevenido a quien no lo ve. Puede estar escondido de unos y no de otros.",
+  },
+  { id: "invisible", label: "Invisible", icon: "invisible", valued: false, desc: "Escondido de todos: prueba plana CD 11 para elegirlo de objetivo y sus ataques encuentran desprevenido al objetivo." },
   {
     id: "frightened",
     label: "Asustado",
@@ -305,6 +346,21 @@ export function effectiveAc(baseAc: number, acAdj: number, cond?: Conditions, sh
   return { ac: baseAc + total, applied };
 }
 
+// ---------- Escondido, oculto e invisible ----------
+
+// ¿Quien tiene estas condiciones está escondido de este observador ("pc:<id>" o "npc:<token>")?
+export const hiddenFrom = (c: Conditions | undefined, observer: string) =>
+  !!c && (!!c.invisible || (!!c.hidden && (!c.hidFrom || c.hidFrom.includes(observer))));
+
+// Prueba plana para elegir de objetivo a alguien (o lanzarle algo de un solo objetivo):
+// 11 si está escondido del atacante, 5 si está oculto, 0 si no hace falta
+export function targetFlatDc(target: Conditions | undefined, attacker: string): number {
+  if (hiddenFrom(target, attacker)) return 11;
+  return target?.concealed ? 5 : 0;
+}
+
+export const FLAT_LABEL: Record<number, string> = { 11: "Escondido", 5: "Oculto" };
+
 // ---------- Vida, moribundo y herido ----------
 
 export interface Vitals {
@@ -316,6 +372,25 @@ export interface Vitals {
 
 export const DEATH_DYING = 4;
 
+// Lo que cambia el moribundo de un PJ: Duro de matar (muere con 5) y Dureza (recuperación −1).
+// Vienen de la hoja (perks), de un interruptor manual o de la Cicatriz del superviviente.
+export interface DeathInfo {
+  diehard?: boolean;
+  toughness?: boolean;
+  perks?: string[];
+  cls?: { spark?: string };
+}
+
+export const hasDiehard = (s: DeathInfo) =>
+  !!s.diehard || !!s.perks?.includes("diehard") || /scar of the survivor/i.test(s.cls?.spark ?? "");
+export const hasToughness = (s: DeathInfo) => !!s.toughness || !!s.perks?.includes("toughness");
+
+// Valor de moribundo con el que muere (varias fuentes de Duro de matar no se suman)
+export const deathAt = (s: DeathInfo) => DEATH_DYING + (hasDiehard(s) ? 1 : 0);
+
+// CD de la tirada de recuperación: 10 + moribundo (9 + moribundo con Dureza)
+export const recoveryDc = (s: DeathInfo & { dying: number }) => 10 + s.dying - (hasToughness(s) ? 1 : 0);
+
 // Drenado: −(nivel, mínimo 1) × valor a los PG máximos
 export function effectiveMaxHp(maxHp: number, level: number, cond?: Conditions) {
   return Math.max(1, maxHp - Math.max(1, level) * (cond?.drained ?? 0));
@@ -323,7 +398,7 @@ export function effectiveMaxHp(maxHp: number, level: number, cond?: Conditions) 
 
 // Daño: primero los PG temporales. Al caer a 0 se gana moribundo 1 + herido;
 // si ya estaba a 0 PG, cada golpe sube moribundo en 1.
-export function applyDamage<T extends Vitals>(s: T, amount: number): T {
+export function applyDamage<T extends Vitals & DeathInfo>(s: T, amount: number): T {
   if (amount <= 0) return s;
   const fromTemp = Math.min(s.temp, amount);
   const rest = amount - fromTemp;
@@ -333,7 +408,7 @@ export function applyDamage<T extends Vitals>(s: T, amount: number): T {
     if (s.hp > 0) dying = Math.max(dying, 1 + s.wounded);
     else dying = dying > 0 ? dying + 1 : 1 + s.wounded;
   }
-  return { ...s, hp, temp: s.temp - fromTemp, dying: Math.min(DEATH_DYING, dying) };
+  return { ...s, hp, temp: s.temp - fromTemp, dying: Math.min(deathAt(s), dying) };
 }
 
 // Curar a alguien moribundo le quita el moribundo y sube herido en 1
@@ -345,7 +420,7 @@ export function applyHealing<T extends Vitals>(s: T, amount: number, maxHp: numb
 }
 
 // Fijar los PG a mano: si bajan cuenta como daño (sin tocar los temporales), si suben como curación
-export function setHp<T extends Vitals>(s: T, value: number, maxHp: number): T {
+export function setHp<T extends Vitals & DeathInfo>(s: T, value: number, maxHp: number): T {
   const target = Math.max(0, Math.min(maxHp, Math.round(value)));
   if (target < s.hp) return { ...applyDamage({ ...s, temp: 0 }, s.hp - target), temp: s.temp };
   if (target > s.hp) return applyHealing(s, target - s.hp, maxHp);
@@ -372,9 +447,9 @@ export function degreeOf(total: number, dc: number, natural?: number): Degree {
 }
 
 // Tirada de recuperación (CD 10 + moribundo)
-export function applyRecovery<T extends Vitals>(s: T, degree: Degree): T {
+export function applyRecovery<T extends Vitals & DeathInfo>(s: T, degree: Degree): T {
   const delta = { "crit-success": -2, success: -1, failure: 1, "crit-failure": 2 }[degree];
-  const dying = Math.max(0, Math.min(DEATH_DYING, s.dying + delta));
+  const dying = Math.max(0, Math.min(deathAt(s), s.dying + delta));
   // Salir de moribundo deja una marca de herido
   const wounded = s.dying > 0 && dying === 0 ? s.wounded + 1 : s.wounded;
   return { ...s, dying, wounded };
@@ -411,6 +486,11 @@ export interface IwrEntry {
   n?: string;
   // Situacional: no se aplica sola, se activa a mano en cada daño
   off?: boolean;
+  // Excepciones: tipos de daño, materiales o runas que la evitan ("vitalidad", "plata",
+  // "toque fantasmal"…), p. ej. los incorpóreos resisten todo salvo fuerza y espíritu
+  ex?: string[];
+  // No se aplica contra golpes críticos (Piel dura como cuerno)
+  nc?: boolean;
 }
 
 export interface Iwr {
@@ -432,18 +512,27 @@ export const IWR_GROUPS: Record<string, string[]> = {
 
 const norm = (s: string) => s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim();
 
-// Nombres en inglés de Pathbuilder y abreviaturas de armas
+// Nombres en inglés de Pathbuilder, abreviaturas de armas y materiales
 const ALIAS: Record<string, string> = {
   s: "cortante", p: "perforante", b: "contundente", slashing: "cortante", piercing: "perforante", bludgeoning: "contundente",
   fire: "fuego", cold: "frio", acid: "acido", electricity: "electricidad", sonic: "sonido", poison: "veneno",
   spirit: "espiritu", vitality: "vitalidad", void: "vacio", force: "fuerza", bleed: "sangrado", precision: "precision",
-  physical: "fisico", all: "todo",
+  physical: "fisico", all: "todo", mental: "mental",
+  silver: "plata", "cold iron": "hierro frio", adamantine: "adamantina", "ghost touch": "toque fantasmal",
 };
 
 export const normType = (t: string) => {
   const n = norm(t);
   return ALIAS[n] ?? n;
 };
+
+// Materiales del arma y la runa Toque fantasmal: activan debilidades y saltan resistencias
+export const MATERIALS: { id: string; label: string }[] = [
+  { id: "plata", label: "Plata" },
+  { id: "hierro frio", label: "Hierro frío" },
+  { id: "adamantina", label: "Adamantina" },
+];
+export const GHOST_TOUCH = "toque fantasmal";
 
 // ¿La entrada de resistencia/inmunidad/debilidad cubre este tipo de daño?
 export function iwrMatches(entryType: string, damageType: string): boolean {
@@ -456,6 +545,22 @@ export function iwrMatches(entryType: string, damageType: string): boolean {
   return (IWR_GROUPS[e] ?? []).includes(d);
 }
 
+// Lo que acompaña al daño: material o runa del arma ("plata", "toque fantasmal") y si fue crítico
+export interface DamageTags {
+  tags?: string[];
+  crit?: boolean;
+  // Las debilidades/resistencias a un material cuentan una vez: solo en la parte del arma
+  noTagMatch?: boolean;
+}
+
+// ¿Se aplica la entrada a este daño? Coincide por tipo o por material, y no la evita una excepción
+function entryApplies(e: { t: string; ex?: string[]; nc?: boolean }, type: string, o: DamageTags): boolean {
+  const tags = (o.tags ?? []).map(normType);
+  if (e.nc && o.crit) return false;
+  if ((e.ex ?? []).some((x) => iwrMatches(x, type) || tags.includes(normType(x)))) return false;
+  return iwrMatches(e.t, type) || (!o.noTagMatch && tags.includes(normType(e.t)));
+}
+
 export interface IwrPick {
   imm: boolean;
   res: number[];
@@ -463,12 +568,25 @@ export interface IwrPick {
 }
 
 // Lo que se aplica por defecto según el tipo de daño (el GM o el jugador puede cambiarlo)
-export function autoIwr(iwr: Iwr | undefined, type: string): IwrPick {
+export function autoIwr(iwr: Iwr | undefined, type: string, o: DamageTags = {}): IwrPick {
   return {
-    imm: (iwr?.imm ?? []).some((t) => iwrMatches(t, type)),
-    res: (iwr?.res ?? []).flatMap((r, i) => (!r.off && iwrMatches(r.t, type) ? [i] : [])),
-    weak: (iwr?.weak ?? []).flatMap((w, i) => (!w.off && iwrMatches(w.t, type) ? [i] : [])),
+    imm: (iwr?.imm ?? []).some((t) => entryApplies({ t }, type, o)),
+    res: (iwr?.res ?? []).flatMap((r, i) => (!r.off && entryApplies(r, type, o) ? [i] : [])),
+    weak: (iwr?.weak ?? []).flatMap((w, i) => (!w.off && entryApplies(w, type, o) ? [i] : [])),
   };
+}
+
+// Los vivos son inmunes al daño de vitalidad y los muertos vivientes al de vacío
+export function lifeIwr(iwr: Iwr | undefined, undead: boolean | undefined): Iwr {
+  const t = undead ? "vacío" : "vitalidad";
+  const imm = iwr?.imm ?? [];
+  return { ...iwr, imm: imm.some((x) => normType(x) === normType(t)) ? imm : [...imm, t] };
+}
+
+// Suma resistencias que dan los rasgos de clase (íconos, etc.) a las anotadas
+export function withExtraIwr(iwr: Iwr | undefined, res: IwrEntry[]): Iwr | undefined {
+  if (!res.length) return iwr;
+  return { ...iwr, res: [...(iwr?.res ?? []), ...res] };
 }
 
 export const hasIwr = (iwr?: Iwr) => !!(iwr?.imm?.length || iwr?.res?.length || iwr?.weak?.length);
@@ -484,7 +602,8 @@ export function resolveIwr(amount: number, iwr: Iwr | undefined, pick: IwrPick):
   return { total: Math.max(0, amount + weak - res), notes };
 }
 
-export const iwrEntryText = (e: IwrEntry) => `${e.t} ${e.v}${e.n ? ` (${e.n})` : ""}`;
+export const iwrEntryText = (e: IwrEntry) =>
+  `${e.t} ${e.v}${e.n ? ` (${e.n})` : ""}${e.ex?.length ? ` salvo ${e.ex.join(", ")}` : ""}${e.nc ? " · no vs crítico" : ""}`;
 
 export function iwrText(iwr?: Iwr): string {
   if (!iwr) return "";

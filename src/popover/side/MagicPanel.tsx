@@ -2,7 +2,7 @@ import { useState } from "react";
 import OBR from "@owlbear-rodeo/sdk";
 import { fmtMod, type SpellCaster } from "../../pathbuilder";
 import { live, petStateId, useLiveStates, type Resources } from "../../live";
-import { checkAdjust, modsText, stackMods, withBuff, type Mod } from "../../rules";
+import { FLAT_LABEL, checkAdjust, hiddenFrom, modsText, stackMods, targetFlatDc, withBuff, type Mod } from "../../rules";
 import { SAVE_LABEL } from "../../shared";
 import type { ExtraSpell, SpellMeta } from "../../extras";
 import { newId } from "../../shared";
@@ -22,7 +22,7 @@ import { DamageLauncher, setLastCast } from "./DamageLauncher";
 import { RunesPanel } from "./RunesPanel";
 import { FxColors } from "../FxColors";
 import { ThrallLinker } from "./ThrallLinker";
-import { selectedTokens, withThralls } from "../thralls";
+import { markThralls, selectedTokens, withThralls } from "../thralls";
 import type { FxKind } from "../../fx";
 
 const TYPE_LABEL: Record<string, string> = { prepared: "Preparado", spontaneous: "Espontáneo", focus: "Foco" };
@@ -190,6 +190,18 @@ export function MagicPanel(props: SideProps) {
     }
     consume(src, o.amp);
 
+    // Conjuro de un solo objetivo contra alguien escondido u oculto: prueba plana antes
+    const flatDc = target && kind !== "fx" && !meta.area ? targetFlatDc(target.state.cond, me) : 0;
+    if (target && flatDc) {
+      const fr = await roll({ label: `${name}: prueba plana (${FLAT_LABEL[flatDc]})`, formula: "1d20", kind: "flat", flat: { dc: flatDc, label: FLAT_LABEL[flatDc] }, tag: "Conjuro" });
+      if (fr && fr.degree !== "success") {
+        await notify({ label: `${name} contra ${target.name}:`, title: "Falla", detail: `No supera la prueba plana CD ${flatDc} (${FLAT_LABEL[flatDc].toLowerCase()})`, tag: "Conjuro" });
+        return true;
+      }
+    }
+    // Escondido de su objetivo: lo encuentra desprevenido
+    const og = !!target && hiddenFrom(state?.cond, `npc:${target.tok}`) && !target.state.cond.offGuard ? 2 : 0;
+
     const design = designFor(name, meta, src, k);
     playFx({ kind: design, from: me, color: colorFor(design) });
     const sp = specialOf(name);
@@ -204,6 +216,7 @@ export function MagicPanel(props: SideProps) {
       meta.blood && f.bloodMagic ? "🩸 Magia de sangre" : "",
       isImpulse && meta.junction && f.gate === "single" ? "Unión de impulso" : "",
       isImpulse && meta.overflow ? "Desborde: el aura se apaga" : "",
+      meta.area ? "Área" : "",
       sp ? SPECIAL_LABEL[sp] : "",
     ]
       .filter(Boolean)
@@ -215,8 +228,8 @@ export function MagicPanel(props: SideProps) {
         title: `${name}${ampText}`,
         formula: `1d20${fmtMod(stats.attack)}`,
         kind: "check",
-        notes: [detail, stats.notes].filter(Boolean).join(" · ") || undefined,
-        vs: target ? { dc: target.ac, name: target.name } : undefined,
+        notes: [detail, stats.notes, og ? "Objetivo desprevenido (no te ve)" : ""].filter(Boolean).join(" · ") || undefined,
+        vs: target ? { dc: target.ac - og, name: target.name } : undefined,
         tag: "Conjuro",
       });
       degree = r?.degree;
@@ -288,7 +301,8 @@ export function MagicPanel(props: SideProps) {
       setThrallPrompt(true);
       return;
     }
-    patchCls((x) => withThralls(x, ids, thrallMax));
+    patchCls((x) => withThralls(x, ids));
+    markThralls(ids, statsOf(mainCaster).dc, c.level);
     for (const tok of ids) playFx({ kind: design, from: tok, color: colorFor(design) });
   };
   const chargeThrall = async () => {

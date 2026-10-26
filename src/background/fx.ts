@@ -1,6 +1,6 @@
 // Dibuja y anima los efectos del mapa como items locales (cada cliente los dibuja por su cuenta).
 import OBR, { buildEffect, type Effect, type Vector2 } from "@owlbear-rodeo/sdk";
-import { DIRS, RANGED_CELLS, ATTACK_FX, defaultColor, fxSksl, fxTiming, hexToVec, type FxKind } from "../fx";
+import { DIRS, RANGED_CELLS, ATTACK_FX, defaultColor, fxSksl, fxTiming, hexToVec, isSplashFx, type FxKind } from "../fx";
 import { OVERLAY_PREFIX } from "../shared";
 
 const FRAME_MS = 33;
@@ -86,7 +86,9 @@ async function addEffect(kind: FxKind, center: Vector2, cells: number, dpi: numb
 export async function playOnToken(kind: FxKind, tokenId: string, color?: string) {
   const g = await tokenGeometry(tokenId);
   const r = Math.max(0.5, g.radius);
-  await addEffect(kind, g.center, r * 3.2, g.dpi, r, undefined, color);
+  // La salpicadura llega a las casillas de alrededor (5 pies)
+  const cells = isSplashFx(kind) ? 2 * (r + 1) + 0.6 : r * 3.2;
+  await addEffect(kind, g.center, cells, g.dpi, r, undefined, color);
 }
 
 const isAttack = (kind: FxKind) => ATTACK_FX.some((a) => a.id === kind);

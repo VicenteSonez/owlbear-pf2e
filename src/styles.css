@@ -1584,3 +1584,44 @@ input.sm2 { width: 92px; }
 .xs-form select { background: #101216; border: 1px solid var(--line); border-radius: 4px; color: var(--text); font-size: 11px; }
 .impl-card .row-x { margin-left: auto; }
 .cb-panel form.cb-row input.sm2 { flex: 1; min-width: 120px; }
+/* Armas: opciones en la tuerca, munición y salpicadura */
+.w-traits { margin: -3px 0 4px; font-size: 11px; text-transform: none; }
+.w-cfg-panel { display: flex; flex-direction: column; margin-bottom: 4px; }
+.w-cfg-row.column { flex-direction: column; align-items: stretch; }
+.w-sec { min-width: 70px; font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.w-cfg-row select { background: #101216; border: 1px solid var(--line); border-radius: 4px; color: var(--text); font-size: 11px; padding: 1px 3px; }
+.ammo-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 5px; }
+.ammo-row .down { color: #ff7b72; }
+.ammo-row .up { color: #6fdc8c; }
+.splash-row { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; padding: 5px 7px; border: 1px dashed #8a5a2a; border-radius: 6px; background: rgba(255, 138, 42, 0.07); }
+.splash-row .sf-targets { display: flex; flex-wrap: wrap; gap: 4px; }
+.runes { display: flex; flex-direction: column; gap: 5px; }
+.rune-card { display: flex; flex-direction: column; gap: 4px; padding: 5px 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-2); }
+.rune-card .row-x { margin-left: auto; }
+.rune-card .feat-notes { margin: 0; min-height: 28px; }
+.dr-part { display: flex; flex-direction: column; gap: 3px; padding-left: 6px; border-left: 2px solid var(--line); }
+/* Íconos del ejemplar */
+.ikon-box { display: flex; flex-direction: column; gap: 5px; margin: 5px 0; padding: 6px 8px; border: 1px solid #b8962e; border-radius: 8px; background: rgba(255, 226, 138, 0.06); }
+.ikon-box p { margin: 0; }
+.ikon-box select { background: #101216; border: 1px solid var(--line); border-radius: 4px; color: var(--text); font-size: 11px; }
+/* Escondido, oculto, invisible y muerto viviente */
+.stealth-row { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.stealth-row .chip { display: inline-flex; align-items: center; gap: 3px; }
+.stealth-row img { opacity: 0.85; }
+.hid-from { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; padding: 5px 7px; border: 1px dashed #8fa3c7; border-radius: 6px; }
+.undead-check { margin: 6px 0; flex: none; }
+.senses-box.perks .cb-row { gap: 10px; }
+.senses-box.perks .te-check { flex: none; }
+/* Pestaña de sanación */
+.rest-btn { width: 100%; display: flex; align-items: center; gap: 12px; padding: 10px 12px; margin-bottom: 6px; border: 1px solid #2e6b40; border-radius: 10px; background: linear-gradient(135deg, rgba(63, 174, 90, 0.18), rgba(63, 174, 90, 0.05)); color: var(--text); text-align: left; }
+.rest-btn:hover:not(:disabled) { border-color: var(--good); background: rgba(63, 174, 90, 0.22); }
+.rest-btn:disabled { opacity: 0.5; }
+.rest-btn svg { color: #8be0a0; flex-shrink: 0; }
+.rest-btn b { display: block; font-size: 15px; }
+.rest-btn small { color: var(--muted); font-size: 11px; }
+.heal-panel .cb-row { margin: 3px 0; }
+.heal-panel select { background: #101216; border: 1px solid var(--line); border-radius: 4px; color: var(--text); font-size: 11px; padding: 1px 3px; max-width: 170px; }
+.pers-imps { display: flex; flex-direction: column; gap: 2px; }
+.aid-result { padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
+.medicine { display: flex; flex-direction: column; gap: 4px; }
+.locked { padding: 8px; border: 1px dashed var(--line); border-radius: 6px; text-align: center; opacity: 0.7; }

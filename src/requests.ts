@@ -24,9 +24,16 @@ export interface DamageReq {
   // Debilidad mortal (taumaturgo): activa la mayor debilidad del objetivo
   mortal?: boolean;
   heal?: boolean;
-  // Daño persistente que deja el golpe (con crítico se duplica)
+  // Daño persistente que deja el golpe (con crítico se duplica, salvo el de solo crítico)
   pers?: PersistentSpec[];
-  // Partes del daño de otro tipo ("1d4 fuego"), para que el GM las vea
+  // Partes del daño por tipo (arma, espíritu, fuego de una runa…): cada una con sus
+  // resistencias. La suma es amt.
+  parts?: { amt: number; ty: string }[];
+  // Material o runa del arma (plata, toque fantasmal…) para debilidades y excepciones
+  tags?: string[];
+  // Daño de salpicadura a un objetivo cercano (no al principal)
+  splash?: boolean;
+  // Versiones anteriores: partes de otro tipo solo como texto
   typed?: string[];
   t: number;
 }

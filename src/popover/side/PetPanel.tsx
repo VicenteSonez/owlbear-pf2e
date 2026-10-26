@@ -146,6 +146,18 @@ function PetVitals({ s, hp, canEdit, onLink, onUnlink, linked, shared }: { s: Pc
             ))}
         </div>
         <ConditionRow cond={s.cond} size={15} />
+        <label className="te-check" title="Los muertos vivientes son inmunes al vacío; los vivos, a la vitalidad">
+          <input
+            type="checkbox"
+            checked={!!s.undead}
+            disabled={!canEdit}
+            onChange={(e) => {
+              const on = e.target.checked || undefined;
+              live.patch(s.id, (x) => ({ ...x, undead: on }));
+            }}
+          />
+          Muerto viviente
+        </label>
       </div>
     </div>
   );

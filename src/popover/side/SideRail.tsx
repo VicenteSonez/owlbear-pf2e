@@ -1,8 +1,8 @@
 import type { Character } from "../../pathbuilder";
 import { featuresOf } from "../../classes";
-import { IconBag, IconBook, IconFeats, IconFlask, IconSheet, IconWolf } from "./icons";
+import { IconBag, IconBook, IconCross, IconFeats, IconFlask, IconSheet, IconWolf } from "./icons";
 
-export type Side = "feats" | "inventory" | "magic" | "recipes" | "pet";
+export type Side = "feats" | "inventory" | "magic" | "recipes" | "pet" | "heal";
 
 // Pestañas que se asoman por el lado derecho de la hoja, en el orden pedido
 export function sidesFor(c: Character): { id: Side; label: string; icon: React.ReactNode }[] {
@@ -17,6 +17,7 @@ export function sidesFor(c: Character): { id: Side; label: string; icon: React.R
       ? [{ id: "recipes" as const, label: "Recetas", icon: <IconFlask /> }]
       : []),
     ...(c.pets?.length || f.thrall ? [{ id: "pet" as const, label: "Mascota", icon: <IconWolf /> }] : []),
+    { id: "heal" as const, label: "Sanación", icon: <IconCross /> },
   ];
 }
 

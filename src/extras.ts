@@ -54,8 +54,12 @@ export interface CustomMod {
   dt?: string;
   // Es daño persistente: se agrega al objetivo en vez de sumarse a la tirada
   pers?: boolean;
-  // Solo con crítico (p. ej. runa flamígera)
+  // Solo con crítico (p. ej. runa flamígera): no se multiplica
   critOnly?: boolean;
+  // Por cada dado de daño del arma (dado base + runas de golpe) en vez de plano
+  perDie?: boolean;
+  // Daño de salpicadura: al objetivo y, con éxito, a los que estén a 5 pies
+  splash?: boolean;
 }
 
 // Ataque que el jugador agrega a mano (un arma encontrada en la partida)
@@ -86,6 +90,8 @@ export interface SpellMeta {
   el?: string;
   overflow?: boolean;
   junction?: boolean;
+  // Efecto de área: no pide la prueba plana contra objetivos escondidos u ocultos
+  area?: boolean;
 }
 
 export interface Rune {
@@ -115,6 +121,19 @@ export interface ClassPrefs {
   // Elemento del aura cinética (si no se detecta de las dotes)
   element?: string;
   implements?: Implement[];
+  // Ícono de arma (nombre) → ataque de la hoja que lo representa (clave del arma)
+  ikonWpn?: Record<string, string>;
+  // Consumible personalizado del Cuerno de la abundancia
+  hornCustom?: { n: string; f?: string };
+}
+
+// Preferencias de la pestaña de sanación
+export interface HealPrefs {
+  // Bono a la curación del descanso (valor o dados)
+  restBonus?: string;
+  // Botiquín de sanador puesto a mano: en general o solo para algunas actividades
+  kit?: boolean;
+  kitFor?: string[];
 }
 
 // Conjuro agregado a mano (innato de un objeto, de una dote…): rango, usos por día y de qué
@@ -160,6 +179,9 @@ export interface Extras {
   cls?: ClassPrefs;
   // Diseño y color de los efectos de magia
   magicFx?: { design?: MagicDesign; color?: string };
+  // Disparos cargados de cada arma que se recarga (por clave del arma)
+  loaded?: Record<string, number>;
+  heal?: HealPrefs;
 }
 
 export const spellKey = (name: string) => name.trim().toLowerCase();

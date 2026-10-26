@@ -66,6 +66,20 @@ export const IconWolf = ({ size = 20 }: P) =>
     </>
   ));
 
+// Sanación: cruz
+export const IconCross = ({ size = 20 }: P) =>
+  svg(size, <path d="M9.5 3.5h5v6h6v5h-6v6h-5v-6h-6v-5h6z" />);
+
+// Descanso: cama
+export const IconBed = ({ size = 34 }: P) =>
+  svg(size, (
+    <>
+      <path d="M2.5 19V6M2.5 15h19v4M21.5 15v-3a3 3 0 0 0-3-3h-8v6" />
+      <circle cx="6.5" cy="11" r="2" />
+      <path d="M15 4.5h3l-3 3h3" strokeWidth={1.4} />
+    </>
+  ));
+
 // Punto de foco: llama
 export const IconFlame = ({ size = 18 }: P) =>
   svg(size, <path d="M12 3c1 3.5 5 5.5 5 10a5 5 0 0 1-10 0c0-2 1-3.5 2-4.5.3 1.5 1 2.5 2 3 0-3 0-6 1-8.5z" />);

@@ -2,15 +2,19 @@ import type { Item } from "@owlbear-rodeo/sdk";
 import type { Character } from "../pathbuilder";
 import type { PcState } from "../live";
 import {
-  DEATH_DYING,
+  CONDITIONS,
+  deathAt,
   effectiveAc,
   effectiveMaxHp,
   modsText,
   shieldBroken,
 } from "../rules";
 import { hpColor } from "../shared";
-import { dealDamage, healTarget } from "../damage";
-import { CondIcon, ConditionRow, Pips } from "./bits";
+import { dealDamage, healTarget, pcIwr } from "../damage";
+import { CondIcon, ConditionRow, Pips, iconUrl } from "./bits";
+
+// Condiciones de sigilo que el propio jugador marca (como al usar Esconderse)
+const STEALTH = ["hidden", "concealed", "invisible"] as const;
 import { DamageBox } from "./DamageBox";
 import { EditableName } from "./side/common";
 
@@ -40,7 +44,8 @@ export function Vitals({ character: c, state: s, canEdit, showLink, token, onPat
   const { ac, applied } = effectiveAc(s.baseAc, s.acAdj, s.cond, s.shield);
   const pct = Math.max(0, Math.min(100, (s.hp / maxHp) * 100));
   const tempPct = Math.min(100, (s.temp / maxHp) * 100);
-  const dead = s.dying >= DEATH_DYING;
+  const death = deathAt(s);
+  const dead = s.dying >= death;
   const acTitle = [`CA de la hoja ${s.baseAc}`, applied.length ? modsText(applied) : "", `= ${ac}`]
     .filter(Boolean)
     .join("\n");
@@ -104,7 +109,7 @@ export function Vitals({ character: c, state: s, canEdit, showLink, token, onPat
         <div className="status-row">
           <Pips
             value={s.dying}
-            max={DEATH_DYING}
+            max={death}
             icon={dead ? "dead" : "dying"}
             label="Moribundo"
             danger
@@ -148,7 +153,7 @@ export function Vitals({ character: c, state: s, canEdit, showLink, token, onPat
         </div>
         {canEdit ? (
           <DamageBox
-            iwr={s.iwr}
+            iwr={pcIwr(s)}
             shield={s.shield}
             onDamage={(n, o) => dealDamage({ kind: "pc", id: s.id }, n, o)}
             onHeal={(n) => healTarget({ kind: "pc", id: s.id }, n)}
@@ -163,6 +168,30 @@ export function Vitals({ character: c, state: s, canEdit, showLink, token, onPat
           </DamageBox>
         ) : null}
         <ConditionRow cond={s.cond} />
+        {canEdit && (
+          <div className="stealth-row">
+            {STEALTH.map((id) => {
+              const def = CONDITIONS.find((d) => d.id === id)!;
+              const on = !!s.cond[id];
+              return (
+                <button
+                  key={id}
+                  className={`chip ${on ? "on" : ""}`}
+                  title={def.desc}
+                  onClick={() =>
+                    onPatch((x) => ({
+                      ...x,
+                      // Al esconderse vale para todos hasta que el GM diga de quién; al salir se olvida
+                      cond: id === "hidden" ? { ...x.cond, hidden: on ? undefined : true, hidFrom: undefined } : { ...x.cond, [id]: on ? undefined : true },
+                    }))
+                  }
+                >
+                  <img src={iconUrl(def.icon)} alt="" width={13} height={13} /> {def.label}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {showLink && (

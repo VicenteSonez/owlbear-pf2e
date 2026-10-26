@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Owlbear Rodeo extension (SDK v3) for Pathfinder 2e. It imports Pathbuilder 2e JSON sheets, rolls 3D dice with the bonuses already added, applies PF2e conditions and rules, and keeps HP/AC in sync with map tokens. Stack: React 19, Vite 8, TypeScript. All UI text and code comments are in **Spanish**; keep them that way.
 
-The pending feature lists live in `Prompts pendientes.docx`, `Prompts pendientes_v2.docx` and `Cambios y arreglos.docx` (fixes requested after phase 6), which are not committed. `Player Core.pdf` and `Pathfinder 2e - Player Core 2 - (OEF).pdf` in the root are the rulebooks used as the rules reference; never commit them. The work is split into phases: 1 dice ✅, 2 rules/sheet/GM tab ✅, 3 combat/initiative ✅, 4 side tabs (Dotes, Inventario, Magia, Recetas, Mascota) ✅, 5 map VFX ✅, 6 (v2 list: NPC sheets, saves, IWR, targets, spell casting, class features, more VFX) ✅.
+The pending feature lists live in `Prompts pendientes.docx`, `Prompts pendientes_v2.docx`, `Cambios y arreglos.docx` (fixes requested after phase 6) and `Documento (10).docx` (phase 7), which are not committed. `Player Core.pdf` and `Pathfinder 2e - Player Core 2 - (OEF).pdf` in the root are the rulebooks used as the rules reference; never commit them. The work is split into phases: 1 dice ✅, 2 rules/sheet/GM tab ✅, 3 combat/initiative ✅, 4 side tabs (Dotes, Inventario, Magia, Recetas, Mascota) ✅, 5 map VFX ✅, 6 (v2 list: NPC sheets, saves, IWR, targets, spell casting, class features, more VFX) ✅, 7 (weapon traits/crit/runes/splash/ammo, Diehard/Toughness, ikons, hidden/concealed/invisible, Sanación tab, IWR exceptions, undead) ✅.
 
 ## Commands
 
@@ -61,7 +61,7 @@ There are four Vite entry pages, each its own Owlbear iframe:
   - What players see of an NPC is `npcPlayerView()`: `hidden` hides the numbers (bar with a word like "Malherido" + conditions, no AC), `veil` hides everything. New NPCs start with numbers hidden.
   - `nick` is the name the GM chose (`renameToken` also renames the Owlbear item). Always build NPC names with `npcLabel({ name, num, nick })`.
 - **PC names**: the owner can rename their character from the sheet header. The nickname lives in localStorage (`pf2.nicks`) and `store.characters()` applies it, so the sheet, live state and published sheet all use it.
-- **Side tabs** (`src/popover/side/`: Dotes, Inventario, Magia, Recetas, Mascota) split their data by who can edit it. Magia is always shown: it also lists scrolls (inventory items named "Scroll of…", consumed on use through `Extras.gone`/`qty`) and spells added by hand (`Extras.xspells`, uses in `PcState.res.used["x:<id>"]`). Attacks added by hand are `Extras.weapons` (`customWeapon()` in `strike.ts`).
+- **Side tabs** (`src/popover/side/`: Dotes, Inventario, Magia, Recetas, Mascota, Sanación) split their data by who can edit it. Sanación (`HealPanel`) has rest, persistent-damage aid, Healer's Toolkit, First Aid and Treat Wounds. Magia is always shown: it also lists scrolls (inventory items named "Scroll of…", consumed on use through `Extras.gone`/`qty`) and spells added by hand (`Extras.xspells`, uses in `PcState.res.used["x:<id>"]`). Attacks added by hand are `Extras.weapons` (`customWeapon()` in `strike.ts`).
   - Resources the GM can also change (focus points, spent slots, Advanced Alchemy, Versatile Vials) go in `PcState.res`. Slot keys are `"<caster>:<rank>"`: a spent count for spontaneous casters, a bitmask for prepared ones.
   - The owner's notes (quantities, invested, money, renamed entries, feat notes, pet modifiers) go in `Extras` (`src/extras.ts`, localStorage `pf2.extras.<charId>`). They're published with the sheet in player metadata, so the GM sees them read-only.
   - Pets get their own `PcState` (`petStateId()`, `pet` field) to reuse HP bars, the token editor and the GM panel. They're left out of initiative.
@@ -85,6 +85,16 @@ There are four Vite entry pages, each its own Owlbear iframe:
     - start of turn: fast healing, lower the shield, recovery check.
   - The background script draws the gold ring on the token whose turn it is and notifies that PC's owner.
 
+### Weapons and damage rolls
+
+- Every weapon option lives in the ⚙ panel of `AttacksTab` and is stored in `WeaponFlags` (localStorage, keyed by weapon key, `custom:<id>` for added attacks): traits, Deadly/Fatal die, melee `throwRange`, splash (`{f, ty, r}`), material, runes (`WeaponRune` with extra damage: normal, `pers` or `splash`, optionally crit-only), ammo, reload and capacity. The parser guesses deadly/fatal/thrown-melee from name tables like agile/finesse.
+- `strikeDamage()` returns the main formula (doubled on a crit) plus `groups`: other damage types (doubled), crit-only damage (Deadly, Fatal's extra die, crit-only mods/runes: **never doubled**) and one splash group (never doubled). `RollRequest.extra` rolls those groups with the main formula and `RollResult.parts` returns each subtotal.
+- `DamageReq.parts` carries the damage per type and `tags` the material/Ghost Touch. The GM's "Daño pendiente" merges parts of the same type (splash adds to base damage before resistances) and applies IWR per type. Material tags only match IWR types on the weapon part (`noTagMatch` for the rest); exceptions (`IwrEntry.ex`) apply to every part.
+- Crit-only persistent damage is not doubled on a crit (`PersistentSpec.crit`).
+- Splash: on success/crit the splash amount also goes to the chosen nearby targets (`popover/splash.ts` measures distances; the default pick is everyone within `r` ft except the attacker). On a failure, a button sends only the splash to the target. The map effect (`burst`/`liquid`/`splat`) plays at the attack's impact time (`IMPACT_AT`).
+- Ammo (`src/ammo.ts`): `reload: 0` spends one item per shot (bows); `reload ≥ 1` needs the Recargar button, which spends the item and fills `Extras.loaded[key]` up to `cap`. Thrown weapons spend themselves unless Returning / "No se gasta" / Shadow Sheath. Only the sheet owner tracks ammo.
+- `CustomMod.perDie` multiplies by `weaponDice(w)` (base die + striking runes only). Implement's Empowerment is +2 per die.
+
 ### Damage, targets and class features
 
 - Persistent damage of the same type doesn't stack: `addPersistent()` keeps the highest (by average) and `persistentByType()` rolls one damage and one flat check per type. `crit` doubles it. Weapons (`Weapon.pers`, set in `WeaponFlags`), the player's custom damage mods and NPC attacks can carry persistent damage; it travels in `DamageReq.pers` for the GM to confirm.
@@ -94,6 +104,11 @@ There are four Vite entry pages, each its own Owlbear iframe:
 - `src/strike.ts` is pure: weapon attack and damage with conditions, the player's custom mods, the chosen target and class features (Rage, Sneak Attack, Precise Strike, stratagem…).
 - Temporary bonuses from others (Courageous Anthem, taunt's off-guard…) are `Buff`s inside `Conditions.buffs`. `until` expires them at the start/end of someone's turn (`expireAll` in `turns.ts`).
 - The Guardian's taunt is stored on the guardian (`cls.taunt`) and applied when the NPC attacks, because players can't write NPC tokens.
+- Exemplar ikons: `IKONS` in `classes.ts`, matched by English name (`cls.spark`). Weapon ikons need `Extras.cls.ikonWpn[name] = weaponKey`. Check bonuses come from `ikonCheckMods`, resistances from `ikonIwr`, NPC-attack adjustments from `ikonVsAttack`. Shared ikons (Mirrored Aegis, Victor's Wreath) write a `Buff` with id `ikon-<pcId>` on the PC and the chosen allies (`cls.share`).
+- Death: `deathAt(s)` (5 with Diehard: feat, manual toggle or Scar of the Survivor) and `recoveryDc(s)` (−1 with Toughness). `PcState.perks` is synced from the sheet; `diehard`/`toughness` are the manual toggles. `applyDamage`/`applyRecovery` read them from the state they get.
+- Undead: `PcState.undead` / `TokenData.undead`. `lifeIwr` adds immunity to void (undead) or vitality (living); `pcIwr(s)` also adds ikon resistances. Thralls are marked undead with 1 HP when linked (`markThralls`); there is no thrall cap besides `THRALL_LIMIT`.
+- Hidden is relative: `cond.hidden` + `cond.hidFrom` (observer keys; no list = everyone, `[]` = nobody). Invisible = hidden from everyone; concealed is absolute. `targetFlatDc` gives the flat check (11 hidden, 5 concealed) before single-target attacks/spells (spells with `area` skip it); an attacker hidden from its target treats it as off-guard. Players only see "Escondido", never the list. The GM's background client hides invisible PC tokens (`${ID}/invis` marks the ones it hid).
+- Persistent damage flat checks use `persistentFlatDc(type, PcState.aid)`: assistance (DC 10, spent after one check) and feat improvements per type.
 
 ### Rules engine
 

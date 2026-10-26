@@ -46,6 +46,41 @@ export interface Weapon {
   pers?: { f: string; ty: string; crit?: boolean };
   // Ataque agregado a mano por el jugador (no viene de Pathbuilder)
   custom?: boolean;
+  // Rasgos de crítico: dado de Letal (deadly) y de Fatal (fatal), en caras
+  deadly?: number;
+  fatal?: number;
+  // Arma cuerpo a cuerpo que también se puede arrojar (daga, lanza…): incremento en pies
+  throwRange?: number;
+  // Daño de salpicadura (bombas): valor o dado, tipo y alcance en pies (5 si no se dice);
+  // no se duplica con crítico
+  splash?: { f: string; ty: string; r?: number };
+  // Material (plata, hierro frío, adamantina) y runas escritas a mano
+  mat?: string;
+  runes?: WeaponRune[];
+  // Munición: "none", "self" (se arroja el arma) o la clave del objeto del inventario.
+  // Sin valor se adivina por el nombre. reload: acciones para recargar (0 = al disparar).
+  ammo?: string;
+  reload?: number;
+  // Disparos por recarga (un cargador da varios)
+  cap?: number;
+  // No se gasta al arrojarla (runa Retornante y similares)
+  keep?: boolean;
+}
+
+// Daño extra de una runa: normal, persistente o de salpicadura; "crit" = solo con crítico
+// (y entonces no se multiplica)
+export interface RuneDamage {
+  f: string;
+  ty: string;
+  kind?: "pers" | "splash";
+  crit?: boolean;
+}
+
+export interface WeaponRune {
+  id: string;
+  n: string;
+  note?: string;
+  dmg?: RuneDamage[];
 }
 
 export interface ShieldInfo {
@@ -96,7 +131,7 @@ export interface Pet {
 }
 
 // Sube este número cuando el lector cambie: las hojas guardadas se vuelven a leer solas
-export const PARSER_VERSION = 5;
+export const PARSER_VERSION = 6;
 
 export interface Character {
   parserVersion?: number;
@@ -196,6 +231,22 @@ const RANGED_WEAPONS: [string, number][] = [
 
 // Armas a distancia arrojadizas: suman la Fuerza al daño (el arco y la honda no)
 const THROWN_WEAPONS = ["javelin", "dart", "shuriken", "bola", "throwing knife", "chakri", "chakram", "boomerang", "aklys", "harpoon", "throwing"];
+
+// Rasgos de crítico de armas comunes (el jugador los puede cambiar): dado de Letal y de Fatal.
+// De más específica a más general porque se buscan por coincidencia parcial.
+const DEADLY_WEAPONS: [string, number][] = [
+  ["rapier", 8], ["katana", 8], ["scythe", 10], ["longbow", 10], ["shortbow", 10], ["starknife", 6],
+];
+const FATAL_WEAPONS: [string, number][] = [
+  ["greatpick", 12], ["light pick", 8], ["pick", 10], ["arquebus", 12], ["dueling pistol", 10],
+  ["flintlock pistol", 8], ["flintlock musket", 10],
+];
+
+// Armas cuerpo a cuerpo con el rasgo Arrojadiza y su incremento de alcance
+const THROWN_MELEE: [string, number][] = [
+  ["dagger", 10], ["light hammer", 20], ["hatchet", 10], ["spear", 20], ["trident", 20], ["starknife", 20], ["club", 10],
+];
+const wordIn = (name: string, w: string) => new RegExp(`(^|[^a-z])${w}([^a-z]|$)`).test(name);
 
 // Sentidos especiales: se buscan en los rasgos especiales y en los nombres de dotes
 const SENSES: [string, string][] = [
@@ -328,7 +379,11 @@ export function parsePathbuilder(raw: unknown): Character {
     const baseName = String(w.name ?? "").toLowerCase();
     const display = String(w.display || w.name || "Arma");
     const ranged = RANGED_WEAPONS.find(([n]) => baseName.includes(n));
+    const throwMelee = !ranged && !/clan dagger/.test(baseName) ? THROWN_MELEE.find(([n]) => wordIn(baseName, n)) : undefined;
     return {
+      deadly: DEADLY_WEAPONS.find(([n]) => baseName.includes(n))?.[1],
+      fatal: FATAL_WEAPONS.find(([n]) => baseName.includes(n))?.[1],
+      throwRange: throwMelee?.[1],
       name: display,
       key: baseName || display.toLowerCase(),
       attack: num(w.attack),
@@ -363,6 +418,7 @@ export function parsePathbuilder(raw: unknown): Character {
       ranged: true,
       range: 20,
       bomb: true,
+      splash: { f: "1", ty: "" },
     });
   }
 

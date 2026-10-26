@@ -1,7 +1,7 @@
 // Tiradas automáticas (sin dados 3D): daño persistente, pruebas planas que lanza el GM, etc.
 // Se publican igual que las tiradas normales, así aparecen en el registro y en las tarjetas.
 import { evaluate, parseFormula, randomDie, randomValues } from "./dice";
-import { degreeOf, persistentByType, type Degree, type PersistentDamage } from "./rules";
+import { degreeOf, persistentByType, persistentFlatDc, type Degree, type PersAid, type PersistentDamage } from "./rules";
 import { newId, type RollEntry } from "./shared";
 
 export interface Roller {
@@ -54,9 +54,8 @@ export function autoFlat(who: Roller, charName: string | undefined, label: strin
 }
 
 // Tirada de recuperación: aquí sí cuentan el éxito/fallo crítico y el 20/1 natural
-export function autoRecovery(who: Roller, charName: string | undefined, dying: number): RollEntry & { degree: Degree } {
+export function autoRecovery(who: Roller, charName: string | undefined, dc: number): RollEntry & { degree: Degree } {
   const d20 = randomDie(20);
-  const dc = 10 + dying;
   return {
     id: newId(),
     time: Date.now(),
@@ -73,12 +72,14 @@ export function autoRecovery(who: Roller, charName: string | undefined, dying: n
   };
 }
 
-// Resuelve todo el daño persistente de un objetivo: tira el daño, luego la prueba plana CD 15.
-// Del mismo tipo solo cuenta el mayor y se hace una sola prueba plana, que lo termina entero.
-// Devuelve el daño total, los efectos que terminan y las tiradas para publicar.
-export function resolvePersistent(who: Roller, charName: string, list: PersistentDamage[]) {
+// Resuelve todo el daño persistente de un objetivo: tira el daño, luego la prueba plana (CD 15,
+// o menos con asistencia o dotes). Del mismo tipo solo cuenta el mayor y se hace una sola
+// prueba plana, que lo termina entero. Devuelve el daño por tipo, los efectos que terminan y
+// las tiradas para publicar.
+export function resolvePersistent(who: Roller, charName: string, list: PersistentDamage[], aid?: PersAid) {
   const entries: RollEntry[] = [];
   let damage = 0;
+  const parts: { amt: number; ty: string }[] = [];
   const ended: string[] = [];
   for (const { top: p, ids } of persistentByType(list)) {
     let dmg: RollEntry;
@@ -88,10 +89,12 @@ export function resolvePersistent(who: Roller, charName: string, list: Persisten
       continue;
     }
     damage += Math.max(0, dmg.total);
+    parts.push({ amt: Math.max(0, dmg.total), ty: p.type });
     entries.push(dmg);
-    const flat = autoFlat(who, charName, `Fin del daño persistente${p.type ? ` (${p.type})` : ""}`, 15);
+    const dc = persistentFlatDc(p.type, aid);
+    const flat = autoFlat(who, charName, `Fin del daño persistente${p.type ? ` (${p.type})` : ""}${dc < 15 ? " · con ayuda" : ""}`, dc);
     entries.push(flat);
     if (flat.degree === "success") ended.push(...ids);
   }
-  return { damage, ended, entries };
+  return { damage, parts, ended, entries };
 }

@@ -54,6 +54,8 @@ export interface NpcSpell {
   rank?: number;
   desc?: string;
   fx?: MagicDesign;
+  // De área: no pide la prueba plana contra objetivos escondidos u ocultos
+  area?: boolean;
 }
 
 export interface NpcSaves {
@@ -94,6 +96,8 @@ export interface TokenData {
   spellDc?: number;
   shield?: ShieldState;
   iwr?: Iwr;
+  // Muerto viviente: inmune al vacío (si no, inmune a la vitalidad)
+  undead?: boolean;
   // Objetivo elegido (clave "pc:<id>" o "npc:<tokenId>") y color de su diana
   target?: string;
   color?: string;
@@ -123,6 +127,7 @@ export interface NpcState {
   spellDc?: number;
   shield?: ShieldState;
   iwr?: Iwr;
+  undead?: boolean;
   target?: string;
   color?: string;
 }
@@ -150,6 +155,7 @@ export function npcState(d: TokenData): NpcState {
     spellDc: d.spellDc,
     shield: d.shield,
     iwr: d.iwr,
+    undead: d.undead || undefined,
     target: d.target,
     color: d.color,
   };

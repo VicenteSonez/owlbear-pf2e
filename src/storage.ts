@@ -1,6 +1,6 @@
-import { PARSER_VERSION, parsePathbuilder, type Character, type Weapon } from "./pathbuilder";
+import { PARSER_VERSION, parsePathbuilder, type Character, type Weapon, type WeaponRune } from "./pathbuilder";
 import { DEFAULT_DICE_STYLE, type DiceStyle } from "./dice";
-import type { AttackFx } from "./fx";
+import type { AttackFx, SplashFx } from "./fx";
 import type { SlingerKind } from "./classes";
 import type { PersistentSpec } from "./shared";
 import { TOAST_KEY, type RollEntry, type ToastItem, type VitalState } from "./shared";
@@ -43,6 +43,19 @@ export interface WeaponFlags {
   // Daño y tipo escritos a mano (bomba del alquimista)
   dmg?: string;
   dmgType?: string;
+  // Rasgos de crítico (0 = sin el rasgo), arrojadiza cuerpo a cuerpo y salpicadura
+  deadly?: number;
+  fatal?: number;
+  throwRange?: number;
+  splash?: { f: string; ty: string; r?: number } | null;
+  mat?: string;
+  runes?: WeaponRune[];
+  ammo?: string;
+  reload?: number;
+  cap?: number;
+  keep?: boolean;
+  // Diseño de la salpicadura en el mapa
+  splashFx?: SplashFx;
 }
 
 export const extraKey = (e: { dice: number; sides: number; type: string }) => `${e.dice}d${e.sides} ${e.type}`;
@@ -62,6 +75,16 @@ export function applyWeaponFlags(w: Weapon, f: WeaponFlags | undefined): Weapon 
     dmgFormula: f.dmg ?? base.dmgFormula,
     damageType: f.dmgType ?? base.damageType,
     extra: base.extra.map((e) => ({ ...e, active: f.extras?.[extraKey(e)] ?? e.active })),
+    deadly: f.deadly === undefined ? base.deadly : f.deadly || undefined,
+    fatal: f.fatal === undefined ? base.fatal : f.fatal || undefined,
+    throwRange: f.throwRange === undefined ? base.throwRange : f.throwRange || undefined,
+    splash: f.splash === undefined ? base.splash : f.splash ?? undefined,
+    mat: f.mat ?? base.mat,
+    runes: f.runes ?? base.runes,
+    ammo: f.ammo ?? base.ammo,
+    reload: f.reload ?? base.reload,
+    cap: f.cap ?? base.cap,
+    keep: f.keep ?? base.keep,
   };
 }
 

@@ -25,6 +25,9 @@ export type MagicDesign =
 // Efectos de rasgos de clase
 export type ClassFx = "rage" | "prey" | "rogue" | "panache" | "finisher" | "lens" | "taunt" | "overdrive" | "explode" | "banner";
 
+// Salpicadura (bombas y similares): explosión, salpicadura líquida o impacto
+export type SplashFx = "burst" | "liquid" | "splat";
+
 export type FxKind =
   | "heal"
   | "damage"
@@ -40,7 +43,8 @@ export type FxKind =
   | "lob"
   | "flurry"
   | MagicDesign
-  | ClassFx;
+  | ClassFx
+  | SplashFx;
 
 export type AttackFx = Extract<FxKind, "slash" | "thrust" | "impact" | "arrow" | "spin" | "gun" | "lob" | "flurry">;
 
@@ -88,8 +92,15 @@ export const CLASS_FX: { id: ClassFx; label: string; color: string }[] = [
   { id: "banner", label: "Estandarte", color: "#d4a72c" },
 ];
 
+export const SPLASH_FX: { id: SplashFx; label: string; color: string }[] = [
+  { id: "burst", label: "Explosión", color: "#ff8a2a" },
+  { id: "liquid", label: "Salpicadura líquida", color: "#5fd35a" },
+  { id: "splat", label: "Impacto", color: "#ffffff" },
+];
+export const isSplashFx = (k: FxKind) => SPLASH_FX.some((s) => s.id === k);
+
 export const defaultColor = (k: FxKind) =>
-  MAGIC_DESIGNS.find((d) => d.id === k)?.color ?? CLASS_FX.find((d) => d.id === k)?.color ?? "#ffffff";
+  MAGIC_DESIGNS.find((d) => d.id === k)?.color ?? CLASS_FX.find((d) => d.id === k)?.color ?? SPLASH_FX.find((d) => d.id === k)?.color ?? "#ffffff";
 
 // Diseño predeterminado según la tradición del lanzador
 export function traditionDesign(tradition: string): MagicDesign {
@@ -184,7 +195,13 @@ const FX_TIMING: Partial<Record<FxKind, number>> = {
   overdrive: 1900,
   explode: 1900,
   banner: 1800,
+  burst: 1300,
+  liquid: 1300,
+  splat: 900,
 };
+
+// Momento del impacto de cada ataque (fracción de su duración): ahí empieza la salpicadura
+export const IMPACT_AT: Partial<Record<FxKind, number>> = { arrow: 0.8, spin: 0.8, gun: 0.4, lob: 0.82, slash: 0.4, thrust: 0.45, impact: 0.2, flurry: 0.5 };
 
 export const RANGED_CELLS = 5;
 
@@ -1212,6 +1229,68 @@ half4 main(float2 coord) {
   return col4(col, a * edgeFade(q));
 }`;
 
+// ---------- Salpicadura: cubre la casilla del objetivo y las de alrededor (5 pies) ----------
+
+// Explosión: bola de fuego, onda y humo
+const BURST = `${HEADER}
+half4 main(float2 coord) {
+  vec2 q = local(coord);
+  vec2 u = q / (r + 1.0);
+  float rr = length(u);
+  float t = min(p / 0.4, 1.0);
+  float R = mix(0.15, 1.0, 1.0 - pow(1.0 - t, 2.0));
+  float n = vnoise(u * 5.0 + p * 4.0);
+  float ball = (1.0 - smoothstep(R * (0.75 + 0.25 * n), R * (0.95 + 0.25 * n), rr)) * (1.0 - smoothstep(0.3, 0.6, p));
+  float core = (1.0 - smoothstep(0.0, R * 0.5, rr)) * (1.0 - smoothstep(0.1, 0.35, p));
+  float shock = lineMask(abs(rr - mix(0.2, 1.05, min(p / 0.45, 1.0))), 0.06) * (1.0 - smoothstep(0.25, 0.55, p));
+  float sm = vnoise(u * 2.5 + vec2(0.0, p * 2.0)) * (1.0 - smoothstep(0.5, 1.1, rr)) * show(0.3, 0.5, 0.8, 1.0);
+  vec3 c = mix(vec3(0.3), mix(col, vec3(1.0, 0.95, 0.7), core), max(ball, shock));
+  return col4(c, max(max(ball, shock), smoothstep(0.3, 0.65, sm) * 0.7) * edgeFade(q));
+}`;
+
+// Salpicadura líquida: una mancha que se esparce y gotas que salen disparadas
+const LIQUID = `${HEADER}
+half4 main(float2 coord) {
+  vec2 q = local(coord);
+  float R0 = r + 1.0;
+  float n = vnoise(q / R0 * 6.0);
+  float spread = mix(0.2, 0.75, 1.0 - pow(1.0 - min(p / 0.3, 1.0), 2.0));
+  float blob = 1.0 - smoothstep(R0 * spread * (0.75 + 0.35 * n), R0 * spread * (0.85 + 0.35 * n), length(q));
+  float a = blob * 0.75 * (1.0 - smoothstep(0.6, 1.0, p));
+  for (int i = 0; i < 16; i++) {
+    float fi = float(i);
+    float ang = hash(fi + 1.3) * 6.2832;
+    float t = clamp(p / 0.55, 0.0, 1.0);
+    float d = R0 * (0.35 + hash(fi + 4.1) * 0.65) * (1.0 - pow(1.0 - t, 2.0));
+    vec2 c = vec2(cos(ang), sin(ang)) * d;
+    float rad = R0 * (0.05 + 0.05 * hash(fi + 7.0)) * (1.0 - 0.4 * t);
+    float drop = 1.0 - smoothstep(rad * 0.7, rad, length(q - c));
+    a = max(a, drop * (1.0 - smoothstep(0.7, 1.0, p)));
+  }
+  vec3 c = mix(col, vec3(1.0), 0.15 * (1.0 - p));
+  return col4(c, a * edgeFade(q));
+}`;
+
+// Impacto: dos ondas, rayos y un destello
+const SPLAT = `${HEADER}
+half4 main(float2 coord) {
+  vec2 q = local(coord);
+  vec2 u = q / (r + 1.0);
+  float rr = length(u);
+  float a = 0.0;
+  for (int i = 0; i < 2; i++) {
+    float fi = float(i);
+    float t = clamp((p - fi * 0.15) / 0.6, 0.0, 1.0);
+    float ring = lineMask(abs(rr - mix(0.1, 1.0, 1.0 - pow(1.0 - t, 2.0))), 0.07 * (1.0 - t) + 0.015) * step(0.001, t) * (1.0 - t);
+    a = max(a, ring);
+  }
+  float ang = atan(u.y, u.x);
+  float rays = pow(abs(cos(ang * 5.0)), 18.0) * step(0.15, rr) * step(rr, mix(0.3, 0.95, min(p / 0.4, 1.0))) * (1.0 - smoothstep(0.3, 0.7, p));
+  float flash = exp(-rr / 0.18) * (1.0 - smoothstep(0.0, 0.3, p));
+  a = max(max(a, rays), flash);
+  return col4(mix(col, vec3(1.0), flash), a * edgeFade(q));
+}`;
+
 const FX_SKSL: Partial<Record<FxKind, string>> = {
   heal: HEAL,
   damage: DAMAGE,
@@ -1252,6 +1331,9 @@ const FX_SKSL: Partial<Record<FxKind, string>> = {
   overdrive: OVERDRIVE,
   explode: EXPLODE,
   banner: BANNER,
+  burst: BURST,
+  liquid: LIQUID,
+  splat: SPLAT,
 };
 
 // Para probar los sombreadores fuera de Owlbear (scripts/check-fx.mjs)

@@ -8,7 +8,7 @@ import { combatStore, npcKey, pcKey, type Combat } from "../combat";
 import { playAttack, playAttackTo, playOnToken, resetFx } from "./fx";
 import type { FxKind, RollFx } from "../fx";
 import type { PcState } from "../live";
-import { DEATH_DYING, activeConditionIcons, effectiveAc, effectiveMaxHp } from "../rules";
+import { activeConditionIcons, deathAt, effectiveAc, effectiveMaxHp, hiddenFrom } from "../rules";
 import {
   CHANNEL_FX,
   CHANNEL_ROLL,
@@ -226,6 +226,15 @@ interface TokenView {
   // Qué ven los jugadores: números, solo barra y estados, o nada
   view: "full" | "status" | "none";
   num?: number;
+  // Escondido o invisible (para quien lo mira): el token se oscurece
+  dim?: boolean;
+}
+
+// ¿Alguno de mis PJ no ve a este PNJ escondido? (el GM lo ve todo)
+function npcHiddenForMe(cond: TokenData["cond"]): boolean {
+  if (!cond?.hidden && !cond?.invisible) return false;
+  if (role === "GM") return true;
+  return Object.values(live.all()).some((s) => s.owner === meId && hiddenFrom(cond, `pc:${s.id}`));
 }
 
 // Marcas que los PJ dejan sobre un PNJ: presa, provocado, vulnerabilidad explotada, siervo
@@ -249,7 +258,8 @@ function viewFor(item: Item, d: TokenData): TokenView | null {
     const hpS = (s.pet?.shared && live.get(s.pet.parent)) || s;
     const ac = effectiveAc(s.baseAc, s.acAdj, s.cond, s.shield).ac;
     const icons: TokenView["icons"] = [];
-    if (hpS.dying > 0) icons.push({ icon: hpS.dying >= DEATH_DYING ? "dead" : "dying", value: hpS.dying });
+    const death = deathAt(hpS);
+    if (hpS.dying > 0) icons.push({ icon: hpS.dying >= death ? "dead" : "dying", value: hpS.dying });
     if (hpS.wounded > 0) icons.push({ icon: "wounded", value: hpS.wounded });
     if (s.shield?.raised) icons.push({ icon: "shield", value: s.shield.bonus });
     if (s.cls?.rage) icons.push({ icon: "rage" });
@@ -257,6 +267,7 @@ function viewFor(item: Item, d: TokenData): TokenView | null {
     if (s.cls?.aura) icons.push({ icon: "aura" });
     if (s.cls?.psyche) icons.push({ icon: "psyche", value: s.cls.psyche });
     icons.push(...activeConditionIcons(s.cond).map((c) => ({ icon: c.icon, value: c.value })));
+    if (s.undead) icons.push({ icon: "undead" });
     icons.push(...classMarks(item.id));
     return {
       hp: hpS.hp,
@@ -264,16 +275,24 @@ function viewFor(item: Item, d: TokenData): TokenView | null {
       temp: hpS.temp,
       ac,
       acChanged: ac !== s.baseAc,
-      dead: hpS.dying >= DEATH_DYING,
+      dead: hpS.dying >= death,
       icons,
       view: "full",
+      dim: !!s.cond.hidden || !!s.cond.invisible,
     };
   }
   const n = npcState(d);
   const ac = effectiveAc(n.baseAc, n.acAdj, n.cond, n.shield).ac;
   const icons: TokenView["icons"] = [];
   if (n.shield?.raised) icons.push({ icon: "shield", value: n.shield.bonus });
-  icons.push(...activeConditionIcons(n.cond).map((c) => ({ icon: c.icon, value: c.value })));
+  // Escondido es relativo: el ícono solo lo ven el GM y quienes no lo ven
+  const hiddenForMe = npcHiddenForMe(n.cond);
+  icons.push(
+    ...activeConditionIcons(n.cond)
+      .filter((c) => c.icon !== "hidden" || hiddenForMe)
+      .map((c) => ({ icon: c.icon, value: c.value })),
+  );
+  if (n.undead) icons.push({ icon: "undead" });
   icons.push(...classMarks(item.id));
   return {
     hp: n.hp,
@@ -285,6 +304,7 @@ function viewFor(item: Item, d: TokenData): TokenView | null {
     icons,
     view: npcPlayerView(n),
     num: n.num,
+    dim: hiddenForMe,
   };
 }
 
@@ -319,7 +339,26 @@ async function buildOverlay(item: Item, v: TokenView): Promise<Item[]> {
       .disableAttachmentBehavior(["ROTATION", "SCALE", "LOCKED", "COPY"]) as T;
 
   let z = Date.now();
+  // Escondido o invisible: velo oscuro sobre el token (sigue a la vista)
+  const veil: Item[] = v.dim
+    ? [
+        common(buildShape().id(partId(item.id, "dim")))
+          .shapeType("CIRCLE")
+          .width(Math.max(bounds.width, bounds.height) * 1.02)
+          .height(Math.max(bounds.width, bounds.height) * 1.02)
+          .position(bounds.center)
+          .fillColor("#05060a")
+          .fillOpacity(0.55)
+          .strokeColor("#8fa3c7")
+          .strokeOpacity(0.7)
+          .strokeWidth(dpi * 0.02)
+          .strokeDash([dpi * 0.06, dpi * 0.05])
+          .zIndex(z++)
+          .build(),
+      ]
+    : [];
   const out: Item[] = [
+    ...veil,
     common(buildShape().id(partId(item.id, "bg")))
       .shapeType("RECTANGLE")
       .width(w)
@@ -555,6 +594,7 @@ async function syncOverlays(items: Item[]) {
     await syncTurnRing();
     await syncTargets(items);
     await syncThralls(items);
+    if (role === "GM") await syncInvisible(items);
   } catch (err) {
     console.error("[PF2e] Error dibujando barras", err);
   } finally {
@@ -736,6 +776,31 @@ async function syncThralls(items: Item[]) {
     if (del.length) await OBR.scene.local.deleteItems(del);
   }
   if (toAdd.length) await OBR.scene.local.addItems(toAdd);
+}
+
+// ---------- PJ invisibles: su token se oculta a los jugadores (lo hace el cliente del GM) ----------
+
+const META_INVIS = `${ID}/invis`;
+
+async function syncInvisible(items: Item[]) {
+  const hide: string[] = [];
+  const show: string[] = [];
+  for (const item of items) {
+    const d = tokenData(item);
+    if (d?.kind !== "pc" || !d.characterId) continue;
+    const invisible = !!live.get(d.characterId)?.cond.invisible;
+    if (invisible && item.visible) hide.push(item.id);
+    // Solo se vuelve a mostrar el que ocultó esta extensión
+    else if (!invisible && !item.visible && item.metadata[META_INVIS]) show.push(item.id);
+  }
+  if (!hide.length && !show.length) return;
+  await OBR.scene.items.updateItems([...hide, ...show], (drafts) => {
+    for (const d of drafts) {
+      const h = hide.includes(d.id);
+      d.visible = !h;
+      d.metadata[META_INVIS] = h ? true : undefined;
+    }
+  });
 }
 
 // ---------- Turno actual: anillo dorado en su token y aviso a su jugador ----------

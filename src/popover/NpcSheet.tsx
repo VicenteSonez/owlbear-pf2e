@@ -7,15 +7,20 @@ import { TARGET_COLORS } from "../live";
 import { autoFlat } from "../autoRoll";
 import {
   DEGREE_LABEL,
+  FLAT_LABEL,
   addPersistent,
   autoIwr,
   checkAdjust,
+  hiddenFrom,
   levelDc,
   modsText,
+  stackMods,
+  targetFlatDc,
   withBuff,
   type Degree,
   type IwrPick,
 } from "../rules";
+import { ikonVsAttack } from "../classes";
 import { PLAYER_VIEW_LABEL, SAVE_LABEL, newId, npcLabel, npcPlayerView, type NpcAttack, type NpcSpell, type NpcState, type PersistentSpec, type SaveKey, type SpellKind } from "../shared";
 import { live } from "../live";
 import { inOwlbear, renameToken } from "../obr";
@@ -88,22 +93,44 @@ export function NpcSheet({ tokenId, itemName, state: n, states, onPatch }: Props
     ? withBuff(n.cond, { id: "taunted", n: `Provocado por ${taunter.name}`, ty: "circumstance", vsOthers: { v: -1, except: `pc:${taunter.id}` } })
     : n.cond;
 
+  // Objetivo escondido u oculto de este PNJ: prueba plana (secreta) antes; con un fallo, falla
+  const flatCheck = async (what: string, pc: PcState | undefined) => {
+    const dc = targetFlatDc(pc?.cond, `npc:${tokenId}`);
+    if (!dc) return true;
+    const r = await roll({ label: `${name}: ${what}: prueba plana (${FLAT_LABEL[dc]})`, formula: "1d20", kind: "flat", flat: { dc, label: FLAT_LABEL[dc] }, secret: true, charName: name }, { quick: true });
+    if (r?.degree === "success") return true;
+    if (r) await notify({ label: `${name}: ${what} contra ${pc?.name ?? "su objetivo"}:`, title: "Falla", detail: `No supera la prueba plana CD ${dc}`, tag: "Ataque", charName: name, secret });
+    return false;
+  };
+  // Atacar revela al PNJ escondido (el invisible sigue escondido)
+  const reveal = () => {
+    if (n.cond.hidden && !n.cond.invisible) onPatch((x) => ({ ...x, cond: { ...x.cond, hidden: undefined, hidFrom: undefined } }));
+  };
+
   const rollAttack = async (a: NpcAttack, map: number) => {
     if (!n.target) return;
     const tgt = await readTarget({ kind: "pc", id: n.target.slice(3) });
     if (!tgt) return;
-    const adj = checkAdjust(cond, { kind: "attack", melee: a.melee, finesse: !!a.dex, target: n.target });
+    const pc = states[n.target.slice(3)];
+    if (!(await flatCheck(a.n || "Ataque", pc))) {
+      reveal();
+      return;
+    }
+    // Íconos del ejemplar: Mancha llamativa (−1 c. a c.) y Mirada afilada (+2 CA a distancia)
+    const ik = ikonVsAttack(pc, a.melee);
+    const adj = stackMods([...checkAdjust(cond, { kind: "attack", melee: a.melee, finesse: !!a.dex, target: n.target }).applied, ...ik.atk]);
     const step = (a.agile ? 4 : 5) * map;
     // Burlar (explorador): +1 circunstancial a la CA contra su presa
-    const pc = states[n.target.slice(3)];
     const outwit = pc?.cls?.prey === tokenId && pc.cls.edge === "outwit" ? 1 : 0;
+    // El PJ no ve al PNJ escondido: queda desprevenido ante el ataque
+    const og = hiddenFrom(n.cond, n.target) && !pc?.cond.offGuard ? 2 : 0;
     const r = await roll(
       {
         label: `${name}: ${a.n || "Ataque"} (${MAP_LABEL[map]})`,
         formula: `1d20${fmtMod(a.atk + adj.total - step)}`,
         kind: "check",
-        notes: modsText(adj.applied) || undefined,
-        vs: { dc: tgt.ac + outwit, name: tgt.name },
+        notes: [modsText(adj.applied), ik.notes, og ? "Objetivo desprevenido (no lo ve)" : ""].filter(Boolean).join(" · ") || undefined,
+        vs: { dc: tgt.ac + outwit + ik.ac - og, name: tgt.name },
         secret: true,
         charName: name,
         tag: "Ataque",
@@ -111,6 +138,7 @@ export function NpcSheet({ tokenId, itemName, state: n, states, onPatch }: Props
       { quick: true },
     );
     if (!r?.degree) return;
+    reveal();
     const fx = a.fx ?? (a.melee ? "slash" : "arrow");
     if (fx !== "none") playFx({ kind: fx, from: tokenId, to: fxTo });
     // Provocado: si ataca a alguien que no es el guardián queda desprevenido hasta su próximo turno
@@ -142,17 +170,17 @@ export function NpcSheet({ tokenId, itemName, state: n, states, onPatch }: Props
       { quick: true },
     );
     if (!r) return;
-    const out = await dealDamage(last.target.ref, r.total, { type: last.ty, pick: pick ?? autoIwr(last.target.iwr, last.ty ?? ""), block });
-    // Daño persistente del golpe (el de "solo crítico" requiere crítico; con crítico se duplica)
+    const out = await dealDamage(last.target.ref, r.total, { type: last.ty, pick: pick ?? autoIwr(last.target.iwr, last.ty ?? "", { crit }), block });
+    // Daño persistente del golpe (el de "solo crítico" requiere crítico y no se duplica; si no, con crítico se duplica)
     const pers = last.pers && withPers && validFormula(last.pers.f) && (!last.pers.crit || crit) ? last.pers : undefined;
     if (pers && last.target.ref.kind === "pc") {
-      const p = { id: newId(), formula: pers.f, type: pers.ty, crit: crit || undefined };
+      const p = { id: newId(), formula: pers.f, type: pers.ty, crit: (crit && !pers.crit) || undefined };
       await live.patch(last.target.ref.id, (s) => ({ ...s, cond: { ...s.cond, persistent: addPersistent(s.cond.persistent, p) } }));
     }
     await notify({
       label: `${name} → ${last.target.name}`,
       title: `${out.total} de daño`,
-      detail: [last.ty, out.notes, pers ? `+ ${pers.f}${crit ? " ×2" : ""} persistente ${pers.ty}`.trim() : ""].filter(Boolean).join(" · "),
+      detail: [last.ty, out.notes, pers ? `+ ${pers.f}${crit && !pers.crit ? " ×2" : ""} persistente ${pers.ty}`.trim() : ""].filter(Boolean).join(" · "),
       tag: crit ? "Crítico" : "Daño",
       charName: name,
       secret,
@@ -173,19 +201,24 @@ export function NpcSheet({ tokenId, itemName, state: n, states, onPatch }: Props
     }
     const detail =
       sp.kind === "save" ? `Salvación de ${SAVE_LABEL[sp.save ?? "reflex"]}${sp.basic ? " básica" : ""}` : sp.kind === "atk" ? "Ataque de conjuro" : "Efecto";
-    await notify({ label: "Lanza", title: sp.n, detail, tag: "Conjuro", charName: name, secret });
+    await notify({ label: "Lanza", title: sp.n, detail: [detail, sp.area ? "Área" : ""].filter(Boolean).join(" · "), tag: "Conjuro", charName: name, secret });
     playFx({ kind: sp.fx ?? "arcane", from: tokenId });
+    const pc = n.target?.startsWith("pc:") ? states[n.target.slice(3)] : undefined;
+    // De un solo objetivo: si está escondido u oculto, prueba plana antes
+    if (pc && !sp.area && !(await flatCheck(sp.n, pc))) return;
     if (sp.kind === "atk" && n.target) {
       const tgt = await readTarget({ kind: "pc", id: n.target.slice(3) });
       if (!tgt) return;
+      const ik = ikonVsAttack(pc, false);
       const adj = checkAdjust(cond, { kind: "spell-attack", target: n.target });
+      const og = hiddenFrom(n.cond, n.target) && !pc?.cond.offGuard ? 2 : 0;
       const r = await roll(
         {
           label: `${name}: ${sp.n} (ataque de conjuro)`,
           formula: `1d20${fmtMod((n.spellAtk ?? 0) + adj.total)}`,
           kind: "check",
-          notes: modsText(adj.applied) || undefined,
-          vs: { dc: tgt.ac, name: tgt.name },
+          notes: [modsText(adj.applied), ik.notes].filter(Boolean).join(" · ") || undefined,
+          vs: { dc: tgt.ac + ik.ac - og, name: tgt.name },
           secret: true,
           charName: name,
           tag: "Conjuro",
@@ -394,7 +427,7 @@ export function NpcSheet({ tokenId, itemName, state: n, states, onPatch }: Props
               <IwrChips
                 iwr={last.target.iwr}
                 type={last.ty ?? ""}
-                pick={pick ?? autoIwr(last.target.iwr, last.ty ?? "")}
+                pick={pick ?? autoIwr(last.target.iwr, last.ty ?? "", { crit: last.degree === "crit-success" })}
                 onPick={setPick}
                 shield={last.target.shield}
                 block={block}
@@ -467,6 +500,9 @@ export function NpcSheet({ tokenId, itemName, state: n, states, onPatch }: Props
             )}
             <input className="md" placeholder="Daño" defaultValue={sp.dmg} onBlur={(e) => setSpell(sp.id, { dmg: e.target.value.trim() || undefined })} />
             <input className="md" list="pf2-damage-types" placeholder="Tipo" defaultValue={sp.ty} onBlur={(e) => setSpell(sp.id, { ty: e.target.value.trim() || undefined })} />
+            <button className={`chip ${sp.area ? "on" : ""}`} title="De área: no pide prueba plana contra objetivos escondidos u ocultos" onClick={() => setSpell(sp.id, { area: !sp.area || undefined })}>
+              Área
+            </button>
             <select className="fx-select" value={sp.fx ?? "arcane"} onChange={(e) => setSpell(sp.id, { fx: e.target.value as MagicDesign })}>
               {MAGIC_DESIGNS.map((d) => (
                 <option key={d.id} value={d.id}>

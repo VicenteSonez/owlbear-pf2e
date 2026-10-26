@@ -2,6 +2,7 @@
 // de Pathbuilder (no por la clase), así también funcionan con dotes de arquetipo.
 // Puro: sin Owlbear ni React.
 import type { Character, Weapon } from "./pathbuilder";
+import type { IwrEntry, Mod, RollCtx } from "./rules";
 
 // Estado de los rasgos de clase en la sala (dentro del PcState): lo ven el GM y el mapa
 export interface ClassState {
@@ -25,8 +26,12 @@ export interface ClassState {
   psyche?: number;
   castR?: number;
   stupR?: number;
-  // Chispa divina inmanente en un ícono
+  // Chispa divina inmanente en un ícono, opción elegida para su inmanencia (tipo de
+  // resistencia, habilidades del cinturón…), aliados que comparten su efecto y usos del Cuerno
   spark?: string;
+  sparkOpt?: string;
+  share?: string[];
+  horn?: number;
   curse?: number;
   // Golpe de conjuro
   ss?: { used?: boolean; armed?: boolean; spell?: string; attack?: string };
@@ -171,6 +176,15 @@ export function featuresOf(c: Character): Features {
   };
 }
 
+// Dotes que cambian el moribundo: Duro de matar (Diehard) y Dureza (Toughness)
+export function sheetPerks(c: Character): string[] {
+  const names = nameSet(c);
+  return [names.includes("diehard") ? "diehard" : "", names.includes("toughness") ? "toughness" : ""].filter(Boolean);
+}
+
+// Límite técnico de siervos activos del nigromante (las reglas no ponen máximo)
+export const THRALL_LIMIT = 20;
+
 // ---------- Números por nivel ----------
 
 export const preciseStrike = (level: number) => {
@@ -224,17 +238,186 @@ export const IMPLEMENT_KIND_LABEL: Record<ImplementKind, string> = {
   free: "Acción gratuita",
   passive: "Pasiva",
 };
-export const IMPLEMENTS: { n: string; kind: ImplementKind; desc: string }[] = [
-  { n: "Amulet", kind: "reaction", desc: "Amulet's Abeyance: resistencia contra el daño de un enemigo a un aliado." },
-  { n: "Bell", kind: "reaction", desc: "Ring Bell: el enemigo hace una salvación o sufre un efecto." },
-  { n: "Chalice", kind: "a1", desc: "Drink from the Chalice: PG temporales o curación." },
-  { n: "Lantern", kind: "passive", desc: "Revela lo oculto y da bonos a Buscar." },
-  { n: "Mirror", kind: "a1", desc: "Mirror's Reflection: crea un reflejo en otra casilla." },
-  { n: "Regalia", kind: "passive", desc: "Aura: bono a Diplomacia, Intimidación y contra el miedo de los aliados." },
-  { n: "Tome", kind: "passive", desc: "Recordar conocimiento mejorado y entrenamiento en habilidades." },
-  { n: "Wand", kind: "a2", desc: "Fling Magic: daño a distancia con salvación." },
-  { n: "Weapon", kind: "reaction", desc: "Implement's Interruption: Golpe de reacción." },
+export const IMPLEMENTS: { n: string; es: string; kind: ImplementKind; desc: string }[] = [
+  { n: "Amulet", es: "Amuleto", kind: "reaction", desc: "Amulet's Abeyance: resistencia contra el daño de un enemigo a un aliado." },
+  { n: "Bell", es: "Campana", kind: "reaction", desc: "Ring Bell: el enemigo hace una salvación o sufre un efecto." },
+  { n: "Censer", es: "Incensario", kind: "a1", desc: "Activa el incensario: su humo afecta a quienes lo rodean." },
+  { n: "Chalice", es: "Cáliz", kind: "a1", desc: "Drink from the Chalice: PG temporales o curación." },
+  { n: "Lantern", es: "Linterna", kind: "passive", desc: "Revela lo oculto y da bonos a Buscar." },
+  { n: "Mirror", es: "Espejo", kind: "a1", desc: "Mirror's Reflection: crea un reflejo en otra casilla." },
+  { n: "Regalia", es: "Regalia", kind: "passive", desc: "Aura: bono a Diplomacia, Intimidación y contra el miedo de los aliados." },
+  { n: "Shield", es: "Escudo", kind: "passive", desc: "Escudo implemento: efecto pasivo mientras lo empuñas." },
+  { n: "Tome", es: "Tomo", kind: "passive", desc: "Recordar conocimiento mejorado y entrenamiento en habilidades." },
+  { n: "Wand", es: "Varita", kind: "a2", desc: "Fling Magic: daño a distancia con salvación." },
+  { n: "Weapon", es: "Arma", kind: "reaction", desc: "Implement's Interruption: Golpe de reacción." },
 ];
+
+export const findImplement = (name: string) => {
+  const n = norm(name);
+  return IMPLEMENTS.find((x) => norm(x.n) === n || norm(x.es) === n);
+};
+
+// ---------- Íconos del ejemplar ----------
+
+// Dónde va el ícono: objeto que se lleva, arma (cuerpo a cuerpo, a distancia o ambas) o escudo
+export type IkonSlot = "worn" | "melee" | "ranged" | "melee-thrown" | "shield";
+
+// Daño extra por dado de daño del arma mientras la chispa está inmanente en un ícono de arma
+export interface IkonDamage {
+  per: number;
+  splash?: boolean;
+  pers?: boolean;
+  // Por dado contra un objetivo bajo la mitad de sus PG o desprevenido
+  vsHalf?: number;
+  vsOffGuard?: number;
+  // Con crítico se cambia por este dado por dado de daño (no se multiplica)
+  critDie?: number;
+}
+
+export interface IkonDef {
+  id: string;
+  n: string;
+  slot: IkonSlot;
+  desc: string;
+  dmg?: IkonDamage;
+  // Opciones a elegir (tipo de resistencia, habilidades)
+  opts?: { id: string; label: string }[];
+  multi?: boolean;
+  // Se activa con un botón (no es pasivo)
+  active?: boolean;
+  // Se comparte con aliados elegidos
+  share?: boolean;
+}
+
+export const IKON_SLOT_LABEL: Record<IkonSlot, string> = {
+  worn: "Objeto",
+  melee: "Arma cuerpo a cuerpo",
+  ranged: "Arma a distancia",
+  "melee-thrown": "Arma cuerpo a cuerpo o arrojadiza",
+  shield: "Escudo",
+};
+
+export const IKONS: IkonDef[] = [
+  { id: "bands", n: "Bands of Imprisonment", slot: "worn", desc: "+1 de estado a Voluntad y resistencia mental igual a la mitad de tu nivel." },
+  { id: "barrow", n: "Barrow's Edge", slot: "melee", desc: "+1 de espíritu por dado del arma; +3 por dado si el objetivo está bajo la mitad de sus PG.", dmg: { per: 1, vsHalf: 3 } },
+  { id: "bangles", n: "Fetching Bangles", slot: "worn", desc: "Elige un enemigo: salvación de Voluntad contra tu CD de clase.", active: true },
+  { id: "eyecatch", n: "Eye-Catching Spot", slot: "worn", desc: "Los enemigos tienen −1 circunstancial a sus ataques cuerpo a cuerpo contra ti." },
+  { id: "gaze", n: "Gaze Sharp as Steel", slot: "worn", desc: "+1 de estado a Percepción y +2 de estado a la CA contra ataques a distancia." },
+  { id: "gleaming", n: "Gleaming Blade", slot: "melee", desc: "+2 de espíritu por dado del arma.", dmg: { per: 2 } },
+  { id: "wildling", n: "Hands of the Wildling", slot: "melee", desc: "+1 de salpicadura de espíritu por dado del arma.", dmg: { per: 1, splash: true } },
+  { id: "horn", n: "Horn of Plenty", slot: "worn", desc: "Crea un consumible al día (2 a nivel 8, 3 a nivel 16): un elixir de vida o uno a elección.", active: true },
+  { id: "aegis", n: "Mirrored Aegis", slot: "shield", desc: "+1 de estado a la CA, para ti y los aliados que elijas.", share: true },
+  { id: "harvest", n: "Mortal Harvest", slot: "melee", desc: "+1 de espíritu persistente por dado del arma.", dmg: { per: 1, pers: true } },
+  { id: "branch", n: "Noble Branch", slot: "melee", desc: "+2 de espíritu por dado del arma.", dmg: { per: 2 } },
+  {
+    id: "pelt",
+    n: "Pelt of the Beast",
+    slot: "worn",
+    desc: "Resistencia igual a la mitad de tu nivel a un tipo: frío, electricidad, fuego, veneno o sonido.",
+    opts: [
+      { id: "frío", label: "Frío" },
+      { id: "electricidad", label: "Electricidad" },
+      { id: "fuego", label: "Fuego" },
+      { id: "veneno", label: "Veneno" },
+      { id: "sonido", label: "Sonido" },
+    ],
+  },
+  { id: "scar", n: "Scar of the Survivor", slot: "worn", desc: "+1 de estado a Fortaleza y el efecto de Duro de matar (mueres con moribundo 5)." },
+  { id: "sheath", n: "Shadow Sheath", slot: "melee-thrown", desc: "+2 de espíritu por dado del arma (+3 contra desprevenidos). El arma arrojadiza no se gasta.", dmg: { per: 2, vsOffGuard: 3 } },
+  {
+    id: "skin",
+    n: "Skin Hard as Horn",
+    slot: "worn",
+    desc: "Resistencia igual a la mitad de tu nivel a cortante, contundente o perforante (no contra críticos).",
+    opts: [
+      { id: "cortante", label: "Cortante" },
+      { id: "contundente", label: "Contundente" },
+      { id: "perforante", label: "Perforante" },
+    ],
+  },
+  {
+    id: "belt",
+    n: "Skybearer's Belt",
+    slot: "worn",
+    desc: "+1 circunstancial (al activarlo) a Atletismo, Reflejos o Fortaleza.",
+    multi: true,
+    opts: [
+      { id: "athletics", label: "Atletismo" },
+      { id: "reflex", label: "Reflejos" },
+      { id: "fortitude", label: "Fortaleza" },
+    ],
+  },
+  { id: "starshot", n: "Starshot", slot: "ranged", desc: "+1 de salpicadura de espíritu por dado del arma.", dmg: { per: 1, splash: true } },
+  { id: "sandals", n: "Thousand-League Sandals", slot: "worn", desc: "+10 ft de estado a la Velocidad." },
+  { id: "titan", n: "Titan's Breaker", slot: "melee", desc: "+2 de espíritu por dado del arma.", dmg: { per: 2 } },
+  { id: "bow", n: "Unfailing Bow", slot: "ranged", desc: "+1 de espíritu por dado del arma; con crítico, 1d4 por dado (no se multiplica).", dmg: { per: 1, critDie: 4 } },
+  { id: "wreath", n: "Victor's Wreath", slot: "worn", desc: "+1 de estado a los ataques, para ti y los aliados que elijas.", share: true },
+];
+
+export const findIkon = (name: string | undefined) => {
+  if (!name) return undefined;
+  const n = norm(name).replace(/[^a-z0-9]/g, "");
+  return IKONS.find((k) => norm(k.n).replace(/[^a-z0-9]/g, "") === n);
+};
+
+// Ícono con la chispa inmanente (si está en el catálogo)
+export const immanentIkon = (s: { cls?: ClassState } | undefined) => findIkon(s?.cls?.spark);
+
+const halfLevel = (level: number) => Math.floor(level / 2);
+
+// Bonos de la inmanencia a pruebas y salvaciones (los que se comparten van como bonos temporales)
+export function ikonCheckMods(s: { cls?: ClassState } | undefined, ctx: RollCtx): Mod[] {
+  const ik = immanentIkon(s);
+  if (!ik) return [];
+  const opt = (s?.cls?.sparkOpt ?? "").split(",");
+  const out: Mod[] = [];
+  if (ik.id === "bands" && ctx.kind === "save" && ctx.key === "will") out.push({ label: ik.n, type: "status", value: 1 });
+  if (ik.id === "scar" && ctx.kind === "save" && ctx.key === "fortitude") out.push({ label: ik.n, type: "status", value: 1 });
+  if (ik.id === "gaze" && ctx.kind === "perception") out.push({ label: ik.n, type: "status", value: 1 });
+  if (ik.id === "belt") {
+    const key = ctx.kind === "save" ? ctx.key : ctx.kind === "skill" ? ctx.key : "";
+    if (key && opt.includes(key)) out.push({ label: ik.n, type: "circumstance", value: 1 });
+  }
+  return out;
+}
+
+// Resistencias de la inmanencia
+export function ikonIwr(s: { cls?: ClassState; level: number } | undefined): IwrEntry[] {
+  const ik = immanentIkon(s);
+  if (!ik || !s) return [];
+  const v = halfLevel(s.level);
+  if (v <= 0) return [];
+  if (ik.id === "bands") return [{ t: "mental", v, n: ik.n }];
+  const t = s.cls?.sparkOpt;
+  if (ik.id === "pelt" && t) return [{ t, v, n: ik.n }];
+  if (ik.id === "skin" && t) return [{ t, v, n: ik.n, nc: true }];
+  return [];
+}
+
+// Ajustes de un ataque de PNJ contra un PJ con su chispa inmanente
+export function ikonVsAttack(s: { cls?: ClassState } | undefined, melee: boolean): { atk: Mod[]; ac: number; notes: string } {
+  const ik = immanentIkon(s);
+  if (ik?.id === "eyecatch" && melee) return { atk: [{ label: ik.n, type: "circumstance", value: -1 }], ac: 0, notes: "" };
+  if (ik?.id === "gaze" && !melee) return { atk: [], ac: 2, notes: `${ik.n}: +2 CA contra ataques a distancia` };
+  return { atk: [], ac: 0, notes: "" };
+}
+
+export const ikonSpeed = (s: { cls?: ClassState } | undefined) => (immanentIkon(s)?.id === "sandals" ? 10 : 0);
+
+// Cuerno de la abundancia: consumibles por día y el elixir de vida según el nivel
+export const hornMax = (level: number) => 1 + steps(level, [8, 16]);
+export function elixirOfLife(level: number): { n: string; f: string } {
+  const table: [number, string, string][] = [
+    [19, "Elixir de vida verdadero", "10d6+27"],
+    [15, "Elixir de vida superior", "8d6+21"],
+    [13, "Elixir de vida mayor", "7d6+18"],
+    [9, "Elixir de vida moderado", "5d6+12"],
+    [5, "Elixir de vida menor", "3d6+6"],
+    [1, "Elixir de vida mínimo", "1d6"],
+  ];
+  const row = table.find(([l]) => level >= l) ?? table[table.length - 1];
+  return { n: row[1], f: row[2] };
+}
 
 export const HUNTER_EDGE_LABEL: Record<HunterEdge, string> = {
   flurry: "Ráfaga",

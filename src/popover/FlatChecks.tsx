@@ -10,11 +10,13 @@ export interface FlatRequest {
 interface Props {
   stupefied: number;
   dying: number;
+  // CD de la tirada de recuperación (10 + moribundo; 9 + moribundo con Dureza)
+  recDc: number;
   onFlat: (r: FlatRequest) => void;
   onClose: () => void;
 }
 
-export function FlatChecks({ stupefied, dying, onFlat, onClose }: Props) {
+export function FlatChecks({ stupefied, dying, recDc, onFlat, onClose }: Props) {
   const [custom, setCustom] = useState("");
   const roll = (r: FlatRequest) => {
     onFlat(r);
@@ -61,9 +63,9 @@ export function FlatChecks({ stupefied, dying, onFlat, onClose }: Props) {
           className="btn"
           disabled={!dying}
           title={dying ? "Ajusta moribundo según el resultado" : "Solo si está moribundo"}
-          onClick={() => roll({ dc: 10 + dying, label: "Tirada de recuperación", recovery: true })}
+          onClick={() => roll({ dc: recDc, label: "Tirada de recuperación", recovery: true })}
         >
-          Recuperación · CD {10 + dying}
+          Recuperación · CD {recDc}
         </button>
       </div>
     </div>

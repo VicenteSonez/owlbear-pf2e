@@ -7,9 +7,9 @@ import OBR from "@owlbear-rodeo/sdk";
 import type { Character } from "./pathbuilder";
 import { ID } from "./shared";
 import { inOwlbear, saveRoom, whenReady } from "./obr";
-import { effectiveMaxHp, type Conditions, type Iwr, type ShieldState, type Vitals } from "./rules";
+import { effectiveMaxHp, type Conditions, type Iwr, type PersAid, type ShieldState, type Vitals } from "./rules";
 import type { InitRoll } from "./combat";
-import type { ClassState } from "./classes";
+import { sheetPerks, type ClassState } from "./classes";
 
 export const META_PC_PREFIX = `${ID}/pc/`;
 const LOCAL_KEY = "pf2.live.local";
@@ -41,6 +41,14 @@ export interface PcState extends Vitals {
   iwr?: Iwr;
   // Rasgos de clase activos (Furia, Panache, presa…)
   cls?: ClassState;
+  // Muerto viviente: inmune al vacío (los vivos son inmunes a la vitalidad)
+  undead?: boolean;
+  // Duro de matar y Dureza puestos a mano; "perks" son los que se detectan en la hoja
+  diehard?: boolean;
+  toughness?: boolean;
+  perks?: string[];
+  // Asistencia y mejoras contra el daño persistente
+  aid?: PersAid;
   t: number;
 }
 
@@ -96,17 +104,29 @@ export function seedState(c: Character, owner?: { id: string; name: string }, pr
     shield: c.shield && c.shield.hp > 0
       ? { name: c.shield.name, bonus: c.shield.bonus, hardness: c.shield.hardness, hp: c.shield.hp, maxHp: c.shield.hp, raised: false }
       : undefined,
+    perks: perksOf(c),
     t: Date.now(),
   };
 }
 
+const perksOf = (c: Character) => {
+  const p = sheetPerks(c);
+  return p.length ? p : undefined;
+};
+
 // La hoja se reimportó (p. ej. subió de nivel): actualiza lo que viene de Pathbuilder
 export function needsSheetSync(s: PcState, c: Character) {
-  return s.name !== c.name || s.level !== c.level || s.maxHp !== c.maxHp || s.baseAc !== c.ac;
+  return (
+    s.name !== c.name ||
+    s.level !== c.level ||
+    s.maxHp !== c.maxHp ||
+    s.baseAc !== c.ac ||
+    (s.perks ?? []).join() !== (perksOf(c) ?? []).join()
+  );
 }
 
 export function syncSheet(s: PcState, c: Character): PcState {
-  const next = { ...s, name: c.name, level: c.level, maxHp: c.maxHp, baseAc: c.ac };
+  const next = { ...s, name: c.name, level: c.level, maxHp: c.maxHp, baseAc: c.ac, perks: perksOf(c) };
   next.hp = Math.min(next.hp, effectiveMaxHp(next.maxHp, next.level, next.cond));
   return next;
 }

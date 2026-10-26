@@ -3,7 +3,7 @@ import OBR, { type Item } from "@owlbear-rodeo/sdk";
 import type { Character } from "../pathbuilder";
 import { live, type PcState } from "../live";
 import { ROOM_LIMIT, afterReady, inOwlbear, metadataSize, patchNpc, unlinkToken } from "../obr";
-import { DEATH_DYING, effectiveAc, effectiveMaxHp } from "../rules";
+import { DEATH_DYING, deathAt, effectiveAc, effectiveMaxHp } from "../rules";
 import { META_TOKEN, hpColor, npcLabel, npcPlayerView, npcState, PLAYER_VIEW_LABEL, type NpcState, type TokenData } from "../shared";
 import { useSaveEffects } from "../requests";
 import { ConditionRow, CondIcon } from "./bits";
@@ -54,6 +54,8 @@ function MiniCard(props: {
   ac: number;
   acChanged: boolean;
   dying?: number;
+  // Moribundo con el que muere (5 con Duro de matar)
+  death?: number;
   cond: PcState["cond"];
   selected: boolean;
   badge?: string;
@@ -65,7 +67,7 @@ function MiniCard(props: {
       <div className="gm-card-top">
         <b>{props.name}</b>
         {props.badge && <span className="badge">{props.badge}</span>}
-        {props.dying ? <CondIcon icon={props.dying >= DEATH_DYING ? "dead" : "dying"} label="Moribundo" value={props.dying} size={16} /> : null}
+        {props.dying ? <CondIcon icon={props.dying >= (props.death ?? DEATH_DYING) ? "dead" : "dying"} label="Moribundo" value={props.dying} size={16} /> : null}
         <span className={`gm-ac ${props.acChanged ? "changed" : ""}`}>CA {props.ac}</span>
       </div>
       <div className="muted small">{props.sub}</div>
@@ -206,6 +208,7 @@ export function GmView({ states, sheets, onOpenSheet, onUpload, onResolvePersist
                 ac={ac}
                 acChanged={ac !== s.baseAc}
                 dying={s.dying}
+                death={deathAt(s)}
                 cond={s.cond}
                 selected={sel?.kind === "pc" && sel.id === s.id}
                 // No se selecciona el token en el mapa: la barra de Owlbear taparía este panel

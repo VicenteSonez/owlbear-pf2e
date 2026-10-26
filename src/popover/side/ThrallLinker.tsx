@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import OBR from "@owlbear-rodeo/sdk";
 import { afterReady, inOwlbear } from "../../obr";
 import { useActions } from "../ctx";
-import { createThrallTokens, selectedTokens, withThralls } from "../thralls";
+import { createThrallTokens, markThralls, selectedTokens, withThralls } from "../thralls";
 import type { SideProps } from "./types";
 
 export function ThrallLinker(props: SideProps & { max: number; color: string; prompt?: boolean; onDone?: () => void }) {
@@ -24,7 +24,8 @@ export function ThrallLinker(props: SideProps & { max: number; color: string; pr
 
   const link = (ids: string[]) => {
     if (!ids.length) return;
-    patch((s) => ({ ...s, cls: withThralls(s.cls ?? {}, ids, max) }));
+    patch((s) => ({ ...s, cls: withThralls(s.cls ?? {}, ids) }));
+    markThralls(ids, c.casters.find((k) => k.type !== "focus")?.dc ?? c.casters[0]?.dc ?? c.classDc, c.level);
     for (const tok of ids) playFx({ kind: "void", from: tok, color });
     onDone?.();
   };
@@ -45,7 +46,7 @@ export function ThrallLinker(props: SideProps & { max: number; color: string; pr
       {prompt && (
         <div className="tl-head">
           <b>☠ Create Thrall</b>
-          <span className="muted small">Elige tus siervos (máx. {max})</span>
+          <span className="muted small">Elige tus siervos (hasta {max} por lanzamiento)</span>
           {onDone && (
             <button className="link-btn" onClick={onDone}>
               Cerrar
@@ -66,7 +67,10 @@ export function ThrallLinker(props: SideProps & { max: number; color: string; pr
           </button>
         )}
       </div>
-      <span className="muted small">Tienes {count}/{max} siervos. Se marcan en el mapa con una calavera de tu color.</span>
+      <span className="muted small">
+        Tienes {count} {count === 1 ? "siervo" : "siervos"} (sin límite; cada lanzamiento crea hasta {max}). Tienen 1 PG, son muertos vivientes y se marcan en
+        el mapa con una calavera de tu color.
+      </span>
     </div>
   );
 }

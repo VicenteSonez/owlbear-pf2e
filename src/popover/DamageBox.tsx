@@ -1,12 +1,14 @@
 import { useState, type ReactNode } from "react";
-import { DAMAGE_TYPES, autoIwr, hasIwr, iwrEntryText, resolveIwr, shieldBroken, type Iwr, type IwrEntry, type IwrPick, type ShieldState } from "../rules";
+import { DAMAGE_TYPES, autoIwr, iwrEntryText, iwrMatches, normType, resolveIwr, shieldBroken, type Iwr, type IwrEntry, type IwrPick, type ShieldState } from "../rules";
 import type { DamageOpts } from "../damage";
+
+const LIFE = ["vitalidad", "vacio"];
 
 // Lista de tipos de daño para los campos de texto (con los grupos de resistencias)
 export function DamageTypeList() {
   return (
     <datalist id="pf2-damage-types">
-      {[...DAMAGE_TYPES, "físico", "todo"].map((t) => (
+      {[...DAMAGE_TYPES, "físico", "todo", "plata", "hierro frío", "adamantina"].map((t) => (
         <option key={t} value={t} />
       ))}
     </datalist>
@@ -26,12 +28,15 @@ export function IwrChips(props: {
   const { iwr, pick, onPick, shield } = props;
   const toggle = (list: number[], i: number) => (list.includes(i) ? list.filter((x) => x !== i) : [...list, i]);
   const canBlock = !!shield && !shieldBroken(shield) && !!props.onBlock;
-  if (!hasIwr(iwr) && !canBlock) return null;
+  // La inmunidad de vivo (vitalidad) o muerto viviente (vacío) la tienen todos: solo se muestra si viene al caso
+  const imm = (iwr?.imm ?? []).filter((t) => !LIFE.includes(normType(t)) || iwrMatches(t, props.type) || pick.imm);
+  const any = imm.length > 0 || (iwr?.res ?? []).length > 0 || (iwr?.weak ?? []).length > 0;
+  if (!any && !canBlock) return null;
   return (
     <div className="iwr-chips">
-      {(iwr?.imm ?? []).length > 0 && (
+      {imm.length > 0 && (
         <button type="button" className={`chip ${pick.imm ? "on" : ""}`} title="Inmunidad: el daño queda en 0" onClick={() => onPick({ ...pick, imm: !pick.imm })}>
-          Inmune ({iwr!.imm!.join(", ")})
+          Inmune ({imm.join(", ")})
         </button>
       )}
       {(iwr?.res ?? []).map((r, i) => (
@@ -153,6 +158,7 @@ export function IwrEditor({ iwr, canEdit, onChange }: { iwr?: Iwr; canEdit: bool
   const [type, setType] = useState("");
   const [val, setVal] = useState("");
   const [note, setNote] = useState("");
+  const [except, setExcept] = useState("");
   const [situational, setSituational] = useState(false);
   const cur: Iwr = iwr ?? {};
   const set = (next: Iwr) => onChange(next.imm?.length || next.res?.length || next.weak?.length ? next : undefined);
@@ -162,13 +168,18 @@ export function IwrEditor({ iwr, canEdit, onChange }: { iwr?: Iwr; canEdit: bool
     if (!t) return;
     if (kind === "imm") set({ ...cur, imm: [...(cur.imm ?? []).filter((x) => x !== t), t] });
     else if (Number.isFinite(v) && v > 0) {
-      const entry: IwrEntry = { t, v, n: note.trim() || undefined, off: situational || undefined };
+      const ex = except
+        .split(/[,;]/)
+        .map((x) => x.trim().toLowerCase())
+        .filter(Boolean);
+      const entry: IwrEntry = { t, v, n: note.trim() || undefined, off: situational || undefined, ex: ex.length ? ex : undefined };
       // Solo se reemplaza una idéntica (mismo tipo y origen)
       set({ ...cur, [kind]: [...(cur[kind] ?? []).filter((x) => !(x.t === t && (x.n ?? "") === (entry.n ?? ""))), entry] });
     } else return;
     setType("");
     setVal("");
     setNote("");
+    setExcept("");
     setSituational(false);
   };
   const toggleOff = (k: "res" | "weak", i: number) => set({ ...cur, [k]: (cur[k] ?? []).map((x, j) => (j === i ? { ...x, off: x.off ? undefined : true } : x)) });
@@ -228,6 +239,21 @@ export function IwrEditor({ iwr, canEdit, onChange }: { iwr?: Iwr; canEdit: bool
           {kind !== "imm" && <input className="sm" inputMode="numeric" placeholder="Valor" value={val} onChange={(e) => setVal(e.target.value.replace(/\D/g, ""))} />}
           {kind !== "imm" && <input className="md" placeholder="Origen (opcional)" value={note} onChange={(e) => setNote(e.target.value)} />}
           {kind !== "imm" && (
+            <input
+              className="md"
+              list="pf2-iwr-except"
+              placeholder="Excepto (vitalidad, plata…)"
+              title="Tipos de daño, materiales o runas que la evitan, separados por comas (p. ej. vitalidad, espíritu, fuerza, toque fantasmal)"
+              value={except}
+              onChange={(e) => setExcept(e.target.value)}
+            />
+          )}
+          <datalist id="pf2-iwr-except">
+            {["vitalidad, espíritu, fuerza, toque fantasmal", "plata", "hierro frío", "adamantina", "toque fantasmal", "vitalidad", "fuerza"].map((x) => (
+              <option key={x} value={x} />
+            ))}
+          </datalist>
+          {kind !== "imm" && (
             <label className="te-check" title="No se aplica sola: la activas en cada daño">
               <input type="checkbox" checked={situational} onChange={(e) => setSituational(e.target.checked)} /> Situacional
             </label>
@@ -237,6 +263,7 @@ export function IwrEditor({ iwr, canEdit, onChange }: { iwr?: Iwr; canEdit: bool
         </form>
       )}
       {(cur.res ?? []).length > 1 && <p className="muted small">De varias resistencias activas contra un mismo daño solo cuenta la mayor.</p>}
+      {canEdit && <p className="muted small">Tipos y materiales: plata, hierro frío y adamantina valen como tipo (debilidad a la plata) o como excepción.</p>}
     </div>
   );
 }

@@ -2,7 +2,7 @@
 // resistencias, debilidades y el bloqueo con escudo. Lo usan la pestaña GM, los ataques de
 // PNJ, los pedidos de daño de los jugadores y las salvaciones básicas.
 import OBR from "@owlbear-rodeo/sdk";
-import { live } from "./live";
+import { live, type PcState } from "./live";
 import { inOwlbear, patchNpc, tokenData } from "./obr";
 import {
   applyDamage,
@@ -10,14 +10,19 @@ import {
   autoIwr,
   effectiveAc,
   effectiveMaxHp,
+  lifeIwr,
+  normType,
   resolveIwr,
   shieldBlock,
+  withExtraIwr,
   type Conditions,
+  type DamageTags,
   type Iwr,
   type IwrPick,
   type ShieldState,
 } from "./rules";
 import { npcLabel, npcState } from "./shared";
+import { ikonIwr } from "./classes";
 
 export type TargetRef = { kind: "pc"; id: string } | { kind: "npc"; tokenId: string };
 
@@ -44,6 +49,9 @@ export interface TargetInfo {
 export const npcMaxHp = (n: { maxHp: number; level: number; cond: Conditions }) => effectiveMaxHp(n.maxHp, n.level, n.cond);
 
 // Lee el estado actual del objetivo (PJ desde la sala, PNJ desde su token)
+// Resistencias de un PJ con las de sus rasgos de clase y la inmunidad de vivo o muerto viviente
+export const pcIwr = (s: PcState) => lifeIwr(withExtraIwr(s.iwr, ikonIwr(s)), s.undead);
+
 export async function readTarget(t: TargetRef): Promise<TargetInfo | null> {
   if (t.kind === "pc") {
     const s = live.get(t.id);
@@ -52,7 +60,7 @@ export async function readTarget(t: TargetRef): Promise<TargetInfo | null> {
       ref: t,
       name: s.name,
       ac: effectiveAc(s.baseAc, s.acAdj, s.cond, s.shield).ac,
-      iwr: s.iwr,
+      iwr: pcIwr(s),
       shield: s.shield,
       cond: s.cond,
       level: s.level,
@@ -68,7 +76,7 @@ export async function readTarget(t: TargetRef): Promise<TargetInfo | null> {
     ref: t,
     name: npcLabel({ name: item.name || n.name, num: n.num, nick: n.nick }),
     ac: effectiveAc(n.baseAc, n.acAdj, n.cond, n.shield).ac,
-    iwr: n.iwr,
+    iwr: lifeIwr(n.iwr, n.undead),
     shield: n.shield,
     cond: n.cond,
     level: n.level,
@@ -77,7 +85,7 @@ export async function readTarget(t: TargetRef): Promise<TargetInfo | null> {
   };
 }
 
-export interface DamageOpts {
+export interface DamageOpts extends DamageTags {
   type?: string;
   // Qué inmunidad/resistencia/debilidad aplicar (si no, las que coinciden con el tipo)
   pick?: IwrPick;
@@ -92,7 +100,7 @@ export interface DamageResult {
 
 // Calcula el daño final (sin escribir nada)
 export function finalDamage(amount: number, iwr: Iwr | undefined, o: DamageOpts): DamageResult {
-  const pick = o.pick ?? autoIwr(iwr, o.type ?? "");
+  const pick = o.pick ?? autoIwr(iwr, o.type ?? "", o);
   return resolveIwr(amount, iwr, pick);
 }
 
@@ -128,6 +136,37 @@ export async function dealDamage(t: TargetRef, amount: number, o: DamageOpts = {
   });
   if (o.block && through !== res.total) notes = [notes, `Escudo bloquea ${res.total - through}`].filter(Boolean).join(", ");
   return { total: through, notes };
+}
+
+// Parte de un daño de varios tipos (arma + espíritu + fuego de una runa…)
+export interface DamagePart {
+  amt: number;
+  ty: string;
+}
+
+export const NO_IWR: IwrPick = { imm: false, res: [], weak: [] };
+
+// Junta las partes del mismo tipo: la salpicadura se suma al daño base antes de las resistencias
+export function mergeParts(parts: DamagePart[]): DamagePart[] {
+  const out: DamagePart[] = [];
+  for (const p of parts) {
+    const same = out.find((x) => normType(x.ty) === normType(p.ty));
+    if (same) same.amt += p.amt;
+    else out.push({ ...p });
+  }
+  return out;
+}
+
+// Daño final de varias partes, cada una con sus resistencias (contra "todo" se aplica a cada tipo)
+export function finalParts(parts: DamagePart[], iwr: Iwr | undefined, picks: IwrPick[]): DamageResult {
+  let total = 0;
+  const notes: string[] = [];
+  parts.forEach((p, i) => {
+    const r = resolveIwr(p.amt, iwr, picks[i] ?? NO_IWR);
+    total += r.total;
+    if (r.notes) notes.push(parts.length > 1 ? `${p.ty || "sin tipo"}: ${r.notes}` : r.notes);
+  });
+  return { total, notes: notes.join(" · ") };
 }
 
 export async function healTarget(t: TargetRef, amount: number) {

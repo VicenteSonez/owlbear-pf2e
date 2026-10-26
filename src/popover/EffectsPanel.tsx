@@ -5,9 +5,10 @@ import { parseFormula } from "../dice";
 import {
   COVERS,
   CONDITIONS,
-  DEATH_DYING,
+  deathAt,
   effectiveAc,
   effectiveMaxHp,
+  lifeIwr,
   addPersistent as withPersistent,
   modsText,
   persistentByType,
@@ -15,9 +16,11 @@ import {
   withoutBuff,
   type ConditionDef,
   type Conditions,
+  type ToggleCondition,
 } from "../rules";
+import { useSceneTokens } from "./hooks";
 import { hpColor, newId, npcLabel, type NpcState } from "../shared";
-import { dealDamage, healTarget, type TargetRef } from "../damage";
+import { dealDamage, healTarget, pcIwr, type TargetRef } from "../damage";
 import { Pips, iconUrl } from "./bits";
 import { DamageBox, IwrEditor } from "./DamageBox";
 import { NpcSheet } from "./NpcSheet";
@@ -41,7 +44,8 @@ function clean(c: Conditions): Conditions {
   const out: Conditions = {};
   for (const [k, v] of Object.entries(c)) {
     if (v === undefined || v === false || v === 0) continue;
-    if (Array.isArray(v) && v.length === 0) continue;
+    // hidFrom vacío significa "escondido de nadie" (sin lista sería de todos)
+    if (Array.isArray(v) && v.length === 0 && k !== "hidFrom") continue;
     (out as Record<string, unknown>)[k] = v;
   }
   return out;
@@ -63,6 +67,14 @@ export function EffectsPanel({ target, states, onPatchPc, onPatchNpc, onOpenShee
   const { ac, applied } = effectiveAc(st.baseAc, st.acAdj, cond, st.shield);
   const name = target.kind === "npc" ? npcLabel({ name: target.itemName || st.name, num: target.state.num, nick: target.state.nick }) : st.name;
   const ref: TargetRef = target.kind === "pc" ? { kind: "pc", id: target.state.id } : { kind: "npc", tokenId: target.tokenId };
+  // De quién puede estar escondido: un PJ, de los PNJ de la escena; un PNJ, de los PJ
+  const tokens = useSceneTokens();
+  const observers =
+    target.kind === "pc"
+      ? tokens.filter((t) => t.data.kind === "npc").map((t) => ({ k: `npc:${t.item.id}`, n: npcLabel({ name: t.item.name || t.data.name, num: t.data.num, nick: t.data.nick }) }))
+      : Object.values(states)
+          .filter((s) => !s.pet)
+          .map((s) => ({ k: `pc:${s.id}`, n: s.name }));
 
   // Cambia condiciones sobre el estado más reciente. Drenado sube → pierde nivel×Δ PG (solo PJ).
   const updCond = (fn: (c: Conditions) => Conditions) => {
@@ -133,7 +145,7 @@ export function EffectsPanel({ target, states, onPatchPc, onPatchNpc, onOpenShee
           {hpSrc.temp ? ` · Temp ${hpSrc.temp}` : ""}
         </span>
       </div>
-      <DamageBox iwr={st.iwr} shield={st.shield} onDamage={(n, o) => dealDamage(ref, n, o)} onHeal={(n) => healTarget(ref, n)} onTemp={setTemp}>
+      <DamageBox iwr={target.kind === "pc" ? pcIwr(target.state) : lifeIwr(st.iwr, st.undead)} shield={st.shield} onDamage={(n, o) => dealDamage(ref, n, o)} onHeal={(n) => healTarget(ref, n)} onTemp={setTemp}>
         <span className="ac-adj">
           CA
           <button onClick={() => (isPc ? onPatchPc(target.state.id, (s) => ({ ...s, acAdj: s.acAdj - 1 })) : onPatchNpc(target.tokenId, (n) => ({ ...n, acAdj: n.acAdj - 1 })))}>
@@ -149,8 +161,8 @@ export function EffectsPanel({ target, states, onPatchPc, onPatchNpc, onOpenShee
         <div className="status-row">
           <Pips
             value={target.state.dying}
-            max={DEATH_DYING}
-            icon={target.state.dying >= DEATH_DYING ? "dead" : "dying"}
+            max={deathAt(target.state)}
+            icon={target.state.dying >= deathAt(target.state) ? "dead" : "dying"}
             label="Moribundo"
             danger
             onChange={(v) => onPatchPc(target.state.id, (s) => ({ ...s, dying: v }))}
@@ -181,7 +193,15 @@ export function EffectsPanel({ target, states, onPatchPc, onPatchNpc, onOpenShee
             <div key={def.id} className={`cond-cell ${active ? "on" : ""}`} title={def.desc}>
               <button
                 className="cond-toggle"
-                onClick={() => (def.valued ? setValued(def, active ? 0 : 1) : updCond((c) => ({ ...c, [def.id]: !c[def.id as "offGuard" | "fatigued"] })))}
+                onClick={() =>
+                  def.valued
+                    ? setValued(def, active ? 0 : 1)
+                    : updCond((c) => {
+                        const on = !c[def.id as ToggleCondition];
+                        // Al dejar de estar escondido se olvida de quién lo estaba
+                        return def.id === "hidden" && !on ? { ...c, hidden: undefined, hidFrom: undefined } : { ...c, [def.id]: on };
+                      })
+                }
               >
                 <img src={iconUrl(def.icon)} alt="" width={24} height={24} />
                 <span>{def.label}</span>
@@ -210,6 +230,50 @@ export function EffectsPanel({ target, states, onPatchPc, onPatchNpc, onOpenShee
           );
         })}
       </div>
+
+      {cond.hidden && (
+        <div className="hid-from">
+          <span className="muted small">
+            Escondido de {cond.hidFrom ? (cond.hidFrom.length ? "estos" : "nadie (lo cree, pero lo ven)") : "todos"}
+            {target.kind === "pc" ? " · el jugador no ve esta lista" : " · los jugadores elegidos ven que no lo ven"}
+          </span>
+          <div className="cb-row">
+            <button className={`chip ${!cond.hidFrom ? "on" : ""}`} onClick={() => updCond((c) => ({ ...c, hidFrom: undefined }))}>
+              Todos
+            </button>
+            {observers.map((o) => {
+              const on = !!cond.hidFrom?.includes(o.k);
+              return (
+                <button
+                  key={o.k}
+                  className={`chip ${on ? "on" : ""}`}
+                  onClick={() =>
+                    updCond((c) => {
+                      const cur = c.hidFrom ?? [];
+                      return { ...c, hidFrom: on ? cur.filter((x) => x !== o.k) : [...cur, o.k] };
+                    })
+                  }
+                >
+                  {o.n}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      <label className="te-check undead-check" title="Los muertos vivientes son inmunes al vacío; los vivos, a la vitalidad">
+        <input
+          type="checkbox"
+          checked={!!st.undead}
+          onChange={(e) => {
+            const on = e.target.checked || undefined;
+            if (target.kind === "pc") onPatchPc(target.state.id, (s) => ({ ...s, undead: on }));
+            else onPatchNpc(target.tokenId, (n) => ({ ...n, undead: on }));
+          }}
+        />
+        Muerto viviente (inmune al vacío; si no, a la vitalidad)
+      </label>
 
       {(cond.buffs ?? []).length > 0 && (
         <div className="buff-list">

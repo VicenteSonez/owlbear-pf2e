@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { Character } from "../pathbuilder";
 import type { PcState } from "../live";
-import { DEATH_DYING, effectiveMaxHp } from "../rules";
+import { DEATH_DYING, deathAt, effectiveMaxHp } from "../rules";
 import { hpColor, npcLabel, npcPlayerView, type NpcState } from "../shared";
 import { NpcHpBar } from "./NpcStatus";
 import type { Combat, Entry } from "../combat";
@@ -46,13 +46,13 @@ function InitInput({ value, onCommit }: { value: number | null; onCommit: (v: nu
   );
 }
 
-function HpBar({ hp, max, dying }: { hp: number; max: number; dying?: number }) {
+function HpBar({ hp, max, dying, death = DEATH_DYING }: { hp: number; max: number; dying?: number; death?: number }) {
   const pct = Math.max(0, Math.min(100, (hp / Math.max(1, max)) * 100));
   return (
     <div className="mini-bar ie-bar">
       <div style={{ width: `${pct}%`, background: hpColor(hp, max) }} />
       <span>
-        {dying && dying >= DEATH_DYING ? "MUERTO" : `${hp}/${max}`}
+        {dying && dying >= death ? "MUERTO" : `${hp}/${max}`}
       </span>
     </div>
   );
@@ -156,11 +156,11 @@ export function CombatView({ combat, entries, isGm, own, ownState, npcStates, al
                     {e.pc?.init && <span className="ie-sub">{e.pc.init.label}</span>}
                     {e.npc && isGm && <span className="ie-sub">mod {e.npc.mod >= 0 ? `+${e.npc.mod}` : e.npc.mod}</span>}
                     {e.pc && e.pc.dying > 0 && (
-                      <CondIcon icon={e.pc.dying >= DEATH_DYING ? "dead" : "dying"} label="Moribundo" value={e.pc.dying} size={15} />
+                      <CondIcon icon={e.pc.dying >= deathAt(e.pc) ? "dead" : "dying"} label="Moribundo" value={e.pc.dying} size={15} />
                     )}
                     {e.pc && e.pc.wounded > 0 && <CondIcon icon="wounded" label="Herido" value={e.pc.wounded} size={15} />}
                   </div>
-                  {e.pc && <HpBar hp={e.pc.hp} max={effectiveMaxHp(e.pc.maxHp, e.pc.level, e.pc.cond)} dying={e.pc.dying} />}
+                  {e.pc && <HpBar hp={e.pc.hp} max={effectiveMaxHp(e.pc.maxHp, e.pc.level, e.pc.cond)} dying={e.pc.dying} death={deathAt(e.pc)} />}
                   {npc && <NpcHpBar state={npc} compact />}
                   <ConditionRow cond={cond} size={15} />
                 </div>

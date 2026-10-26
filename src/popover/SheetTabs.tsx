@@ -3,8 +3,8 @@ import { PROF_LABEL, fmtMod, type Character, type Stat } from "../pathbuilder";
 import type { RollEntry } from "../shared";
 import type { PcState } from "../live";
 import type { Extras } from "../extras";
-import { checkAdjust, effectiveMaxHp, modsText, stackMods, type Mod, type RollCtx } from "../rules";
-import { OUTWIT_SKILLS, featuresOf } from "../classes";
+import { checkAdjust, effectiveMaxHp, hasDiehard, hasToughness, iwrEntryText, modsText, stackMods, type Mod, type RollCtx } from "../rules";
+import { OUTWIT_SKILLS, featuresOf, ikonCheckMods, ikonIwr } from "../classes";
 import { dealDamage } from "../damage";
 import type { RollRequest } from "./App";
 import { LogList } from "./LogList";
@@ -57,7 +57,7 @@ export function SheetTabs(props: Props) {
 
   // Bonificadores de las condiciones activas (y de los bonos manuales) para cada tirada
   const extraMods = (ctx: RollCtx): Mod[] => {
-    const out: Mod[] = [];
+    const out: Mod[] = [...ikonCheckMods(state, ctx)];
     const key = ctx.kind === "perception" ? "perception" : ctx.kind === "skill" ? ctx.key : "";
     if (huntBonus && (key === "perception" || key === "survival")) out.push({ label: "Cazar presa", type: "circumstance", value: 2 });
     if (outwitBonus && OUTWIT_SKILLS.includes(key)) out.push({ label: "Burlar", type: "circumstance", value: 2 });
@@ -87,6 +87,8 @@ export function SheetTabs(props: Props) {
 
   const perception = adjust(c.perception.mod, { kind: "perception" });
   const speed = classSpeed(c, state);
+  // Lo que viene de las dotes no se puede apagar a mano
+  const perks = { diehard: !!state?.perks?.includes("diehard") || /scar of the survivor/i.test(state?.cls?.spark ?? ""), toughness: !!state?.perks?.includes("toughness") };
 
   return (
     <section className="tabs">
@@ -198,6 +200,38 @@ export function SheetTabs(props: Props) {
               <div className="senses-box">
                 <small>Inmunidades, resistencias y debilidades</small>
                 <IwrEditor iwr={state.iwr} canEdit={canEdit} onChange={(iwr) => onPatch((x) => ({ ...x, iwr }))} />
+                <span className="muted small">
+                  {state.undead ? "Muerto viviente: inmune al vacío." : "Vivo: inmune a la vitalidad."}
+                  {ikonIwr(state).map((r) => ` Resistencia ${iwrEntryText(r)}.`).join("")}
+                </span>
+              </div>
+            )}
+            {state && (
+              <div className="senses-box perks">
+                <small>Moribundo y criatura</small>
+                <div className="cb-row">
+                  <label className="te-check" title={perks.diehard ? "Detectado en tus dotes (o por un ícono)" : "Duro de matar (Diehard): mueres con moribundo 5 en vez de 4. No se suma con otras fuentes."}>
+                    <input type="checkbox" checked={hasDiehard(state)} disabled={!canEdit || perks.diehard} onChange={(e) => {
+                        const on = e.target.checked;
+                        onPatch((x) => ({ ...x, diehard: on || undefined }));
+                      }} />
+                    Duro de matar (muere con 5)
+                  </label>
+                  <label className="te-check" title={perks.toughness ? "Detectado en tus dotes" : "Dureza (Toughness): la CD de las tiradas de recuperación baja en 1. No se suma con otras fuentes."}>
+                    <input type="checkbox" checked={hasToughness(state)} disabled={!canEdit || perks.toughness} onChange={(e) => {
+                        const on = e.target.checked;
+                        onPatch((x) => ({ ...x, toughness: on || undefined }));
+                      }} />
+                    Dureza (recuperación −1)
+                  </label>
+                  <label className="te-check" title="Los muertos vivientes son inmunes al vacío; los vivos, a la vitalidad">
+                    <input type="checkbox" checked={!!state.undead} disabled={!canEdit} onChange={(e) => {
+                        const on = e.target.checked;
+                        onPatch((x) => ({ ...x, undead: on || undefined }));
+                      }} />
+                    Muerto viviente
+                  </label>
+                </div>
               </div>
             )}
             {c.parserVersion === undefined && (
