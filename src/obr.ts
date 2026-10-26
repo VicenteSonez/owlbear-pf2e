@@ -29,6 +29,30 @@ export function afterReady(fn: () => (() => void) | void): () => void {
 
 export const roomId =() => (inOwlbear ? OBR.room.id : "local");
 
+// La metadata de la sala tiene un límite de 16 KB (compartido con otras extensiones)
+export const ROOM_LIMIT = 16 * 1024;
+export const metadataSize = (md: unknown) => new TextEncoder().encode(JSON.stringify(md)).length;
+
+let lastWarn = 0;
+
+// Escribe en la metadata de la sala. Si Owlbear la rechaza (p. ej. la sala está llena) avisa
+// en vez de fallar en silencio: si no, cada cliente seguiría viendo su propia versión hasta que
+// llegara otro cambio y todo "volviera atrás". Devuelve si se guardó.
+export async function saveRoom(update: Record<string, unknown>): Promise<boolean> {
+  try {
+    await OBR.room.setMetadata(update);
+    return true;
+  } catch (err) {
+    console.error("[PF2e] No se pudo guardar en la sala", err);
+    if (Date.now() - lastWarn > 20_000) {
+      lastWarn = Date.now();
+      const kb = await OBR.room.getMetadata().then((md) => (metadataSize(md) / 1024).toFixed(1)).catch(() => "?");
+      OBR.notification.show(`PF2e: no se pudo guardar el cambio (sala con ${kb} de 16 KB). Cierra salvaciones viejas o daño pendiente.`, "ERROR");
+    }
+    return false;
+  }
+}
+
 export const tokenData = (item: Item): TokenData | undefined =>
   item.metadata[META_TOKEN] as TokenData | undefined;
 

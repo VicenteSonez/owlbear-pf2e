@@ -45,9 +45,9 @@ async function ensureActiveState() {
   if (!c) return;
   const s = live.get(c.id);
   if (!s) {
-    await live.write(seedState(c, { id: meId, name: meName }, store.legacyVitals(c.id) ?? undefined));
+    await live.seed(seedState(c, { id: meId, name: meName }, store.legacyVitals(c.id) ?? undefined));
   } else if (s.owner === meId && (needsSheetSync(s, c) || s.ownerName !== meName)) {
-    await live.write({ ...syncSheet(s, c), ownerName: meName });
+    await live.patch(c.id, (x) => ({ ...syncSheet(x, c), ownerName: meName }));
   }
 }
 

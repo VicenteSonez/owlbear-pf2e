@@ -52,6 +52,8 @@ There are four Vite entry pages, each its own Owlbear iframe:
 - **Live PC state** (`PcState` in `src/live.ts`): HP, temp, dying/wounded, conditions, shield, hero points, AC adjustment. It lives in **room metadata**, one key per character (`cl.nacho.pf2e-sheets/pc/<id>`), so every client sees it and anyone can edit it.
   - Room metadata is capped at about 16KB in total, so keep the state small.
   - Access it through the `live` singleton and the `useLiveStates()` hook.
+  - Write room metadata only through `saveRoom()` (`src/obr.ts`): it warns when Owlbear rejects the write (full room) and the stores then resync from the room. The GM tab shows how full the room is.
+  - Create a PC's state only with `live.seed()`, never `live.write()`. A room snapshot without the key can be momentary; seeding then used to reset HP and drop the PC from initiative. `seed` confirms with Owlbear and reuses the last state it saw.
 - **Token link / NPC state**: scene item metadata (`META_TOKEN`, `TokenData` in `src/shared.ts`).
   - PC tokens hold only `{kind:"pc", characterId, ownerId}`; their numbers come from live state.
   - NPC tokens hold their own HP/AC/cond. Read them through `npcState()` and write through `patchNpc()`.

@@ -170,12 +170,13 @@ export function App() {
       const s = states[c.id];
       const isActive = c.id === activeId;
       if (!s) {
-        if (isActive) live.write(seedState(c, { id: session.me.id, name: session.me.name }, store.legacyVitals(c.id) ?? undefined));
+        if (isActive) live.seed(seedState(c, { id: session.me.id, name: session.me.name }, store.legacyVitals(c.id) ?? undefined));
         continue;
       }
       if (s.owner !== session.me.id) continue;
       const ownerName = isActive ? session.me.name : s.ownerName;
-      if (needsSheetSync(s, c) || s.ownerName !== ownerName) live.write({ ...syncSheet(s, c), ownerName });
+      // Sobre lo último del almacén, no sobre la copia de React, que puede ir un cambio atrás
+      if (needsSheetSync(s, c) || s.ownerName !== ownerName) live.patch(c.id, (x) => ({ ...syncSheet(x, c), ownerName }));
     }
   }, [liveReady, session.ready, characters, activeId, states, session.me.id, session.me.name]);
 
@@ -208,7 +209,7 @@ export function App() {
       setCharacters(store.characters());
       if (view === "gm-import") {
         // Hoja que controla el GM (o de un jugador ausente): queda en la sala con el GM como dueño
-        if (!live.get(c.id)) await live.write(seedState(c, { id: session.me.id, name: "" }));
+        await live.seed(seedState(c, { id: session.me.id, name: "" }));
         setView("gm");
         return;
       }

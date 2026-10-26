@@ -4,7 +4,7 @@
 import { useEffect, useState } from "react";
 import OBR from "@owlbear-rodeo/sdk";
 import { ID } from "./shared";
-import { inOwlbear, whenReady } from "./obr";
+import { inOwlbear, saveRoom, whenReady } from "./obr";
 import type { PcState } from "./live";
 
 export const META_COMBAT = `${ID}/combat`;
@@ -195,8 +195,10 @@ class CombatStore {
   async write(c: Combat) {
     this.combat = { ...c, t: Date.now() };
     this.emit();
-    if (inOwlbear) await OBR.room.setMetadata({ [META_COMBAT]: this.combat });
-    else {
+    if (inOwlbear) {
+      // Rechazado: vuelve a lo que tiene la sala en vez de mostrar un combate que nadie más ve
+      if (!(await saveRoom({ [META_COMBAT]: this.combat }))) this.ingest((await OBR.room.getMetadata())[META_COMBAT]);
+    } else {
       try {
         localStorage.setItem(LOCAL_KEY, JSON.stringify(this.combat));
       } catch {

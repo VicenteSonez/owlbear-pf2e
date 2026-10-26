@@ -6,7 +6,7 @@
 import { useEffect, useState } from "react";
 import OBR from "@owlbear-rodeo/sdk";
 import { ID, type PersistentSpec, type SaveKey } from "./shared";
-import { inOwlbear, whenReady } from "./obr";
+import { inOwlbear, saveRoom, whenReady } from "./obr";
 import type { Degree } from "./rules";
 
 export interface DamageReq {
@@ -138,8 +138,8 @@ class PrefixStore<T> {
   async set(key: string, value: T) {
     this.data = { ...this.data, [key]: value };
     this.emit();
-    if (inOwlbear) await OBR.room.setMetadata({ [this.prefix + key]: value });
-    else this.persistLocal();
+    if (!inOwlbear) this.persistLocal();
+    else if (!(await saveRoom({ [this.prefix + key]: value }))) this.ingest(await OBR.room.getMetadata());
   }
 
   async remove(keys: string[]) {
@@ -148,8 +148,8 @@ class PrefixStore<T> {
     for (const k of keys) delete next[k];
     this.data = next;
     this.emit();
-    if (inOwlbear) await OBR.room.setMetadata(Object.fromEntries(keys.map((k) => [this.prefix + k, undefined])));
-    else this.persistLocal();
+    if (!inOwlbear) this.persistLocal();
+    else if (!(await saveRoom(Object.fromEntries(keys.map((k) => [this.prefix + k, undefined]))))) this.ingest(await OBR.room.getMetadata());
   }
 }
 

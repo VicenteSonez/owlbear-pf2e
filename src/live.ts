@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import OBR from "@owlbear-rodeo/sdk";
 import type { Character } from "./pathbuilder";
 import { ID } from "./shared";
-import { inOwlbear, whenReady } from "./obr";
+import { inOwlbear, saveRoom, whenReady } from "./obr";
 import { effectiveMaxHp, type Conditions, type Iwr, type ShieldState, type Vitals } from "./rules";
 import type { InitRoll } from "./combat";
 import type { ClassState } from "./classes";
@@ -115,6 +115,11 @@ type Listener = (states: Record<string, PcState>) => void;
 
 class LiveStore {
   private states: Record<string, PcState> = {};
+  // Última versión vista de cada estado en esta sesión, aunque luego desaparezca de la sala
+  private seen: Record<string, PcState> = {};
+  private seeding = new Set<string>();
+  // Si la sala rechaza la hoja nueva no se reintenta enseguida (cada intento vuelve a fallar)
+  private seedFailed: Record<string, number> = {};
   private listeners = new Set<Listener>();
   private startPromise: Promise<void> | null = null;
   ready = false;
@@ -144,7 +149,13 @@ class LiveStore {
       if (k.startsWith(META_PC_PREFIX) && v && typeof v === "object") next[k.slice(META_PC_PREFIX.length)] = v as PcState;
     }
     this.states = next;
+    Object.assign(this.seen, next);
     this.emit();
+  }
+
+  // Vuelve a leer la sala (tras una escritura rechazada, para no quedarse con una versión que nadie más ve)
+  private async resync() {
+    this.ingest(await OBR.room.getMetadata());
   }
 
   private ingestLocal() {
@@ -189,12 +200,42 @@ class LiveStore {
     return s?.pet?.shared && this.states[s.pet.parent] ? s.pet.parent : id;
   }
 
-  async write(state: PcState) {
+  async write(state: PcState): Promise<boolean> {
     const next = normalize({ ...state, t: Date.now() });
     this.states = { ...this.states, [next.id]: next };
+    this.seen[next.id] = next;
     this.emit();
-    if (inOwlbear) await OBR.room.setMetadata({ [META_PC_PREFIX + next.id]: next });
-    else this.persistLocal();
+    if (!inOwlbear) {
+      this.persistLocal();
+      return true;
+    }
+    if (await saveRoom({ [META_PC_PREFIX + next.id]: next })) return true;
+    await this.resync();
+    return false;
+  }
+
+  // Crea el estado de una hoja que aún no está en la sala. Una lectura de la sala sin la clave
+  // puede ser momentánea (reconexión, escritura rechazada): crear una hoja nueva entonces
+  // pisaba PG, condiciones e iniciativa. Por eso se confirma con Owlbear antes de escribir y,
+  // si este cliente ya la había visto, se recrea con lo último conocido en vez de desde cero.
+  async seed(state: PcState) {
+    const id = state.id;
+    if (this.states[id] || this.seeding.has(id) || Date.now() - (this.seedFailed[id] ?? 0) < 30_000) return;
+    this.seeding.add(id);
+    try {
+      if (inOwlbear) {
+        if (this.seen[id]) await new Promise((r) => window.setTimeout(r, 3000));
+        const md = await OBR.room.getMetadata();
+        if (md[META_PC_PREFIX + id]) {
+          this.ingest(md);
+          return;
+        }
+      }
+      if (this.states[id]) return;
+      if (!(await this.write(this.seen[id] ?? state))) this.seedFailed[id] = Date.now();
+    } finally {
+      this.seeding.delete(id);
+    }
   }
 
   // Lee lo último conocido justo antes de escribir para pisar lo menos posible a otros
@@ -207,9 +248,10 @@ class LiveStore {
   async remove(id: string) {
     const { [id]: _removed, ...rest } = this.states;
     this.states = rest;
+    delete this.seen[id];
     this.emit();
-    if (inOwlbear) await OBR.room.setMetadata({ [META_PC_PREFIX + id]: undefined });
-    else this.persistLocal();
+    if (!inOwlbear) this.persistLocal();
+    else if (!(await saveRoom({ [META_PC_PREFIX + id]: undefined }))) await this.resync();
   }
 }
 

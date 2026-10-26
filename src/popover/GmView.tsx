@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import OBR, { type Item } from "@owlbear-rodeo/sdk";
 import type { Character } from "../pathbuilder";
 import { live, type PcState } from "../live";
-import { afterReady, inOwlbear, patchNpc, unlinkToken } from "../obr";
+import { ROOM_LIMIT, afterReady, inOwlbear, metadataSize, patchNpc, unlinkToken } from "../obr";
 import { DEATH_DYING, effectiveAc, effectiveMaxHp } from "../rules";
 import { META_TOKEN, hpColor, npcLabel, npcPlayerView, npcState, PLAYER_VIEW_LABEL, type NpcState, type TokenData } from "../shared";
 import { useSaveEffects } from "../requests";
@@ -80,6 +80,19 @@ function MiniCard(props: {
   );
 }
 
+// Cuánto ocupa la metadata de la sala: llena, Owlbear rechaza los cambios de PG, iniciativa…
+function useRoomUsage() {
+  const [bytes, setBytes] = useState(0);
+  useEffect(() => {
+    if (!inOwlbear) return;
+    return afterReady(() => {
+      OBR.room.getMetadata().then((md) => setBytes(metadataSize(md)));
+      return OBR.room.onMetadataChange((md) => setBytes(metadataSize(md)));
+    });
+  }, []);
+  return bytes;
+}
+
 export function GmView({ states, sheets, onOpenSheet, onUpload, onResolvePersistent }: Props) {
   const tokens = useSceneTokens();
   const [sel, setSel] = useState<Sel>(null);
@@ -88,6 +101,7 @@ export function GmView({ states, sheets, onOpenSheet, onUpload, onResolvePersist
   const pending = usePendingCount();
   const saveCount = Object.keys(useSaveEffects()).length;
   const { meId } = useActions();
+  const roomBytes = useRoomUsage();
 
   const pcs = useMemo(() => Object.values(states).sort((a, b) => a.name.localeCompare(b.name)), [states]);
   const npcs = useMemo(
@@ -229,6 +243,15 @@ export function GmView({ states, sheets, onOpenSheet, onUpload, onResolvePersist
               />
             );
           })}
+          {roomBytes > 0 && (
+            <p
+              className="muted small"
+              style={roomBytes > ROOM_LIMIT * 0.8 ? { color: "#ff7b72" } : undefined}
+              title="Límite de Owlbear para la sala, compartido con otras extensiones. Si se llena, los cambios no se guardan."
+            >
+              Sala: {(roomBytes / 1024).toFixed(1)} / 16 KB{roomBytes > ROOM_LIMIT * 0.8 ? " — casi llena: cierra salvaciones viejas" : ""}
+            </p>
+          )}
         </aside>
         <section className="gm-detail">
           {target ? (
