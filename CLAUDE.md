@@ -6,13 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Owlbear Rodeo extension (SDK v3) for Pathfinder 2e. It imports Pathbuilder 2e JSON sheets, rolls 3D dice with the bonuses already added, applies PF2e conditions and rules, and keeps HP/AC in sync with map tokens. Stack: React 19, Vite 8, TypeScript. All UI text and code comments are in **Spanish**; keep them that way.
 
-The pending feature lists live in `Prompts pendientes.docx` and `Prompts pendientes_v2.docx`, which are not committed. The work is split into phases: 1 dice ✅, 2 rules/sheet/GM tab ✅, 3 combat/initiative ✅, 4 side tabs (Dotes, Inventario, Magia, Recetas, Mascota) ✅, 5 map VFX ✅, 6 (v2 list: NPC sheets, saves, IWR, targets, spell casting, class features, more VFX) ✅.
+The pending feature lists live in `Prompts pendientes.docx`, `Prompts pendientes_v2.docx` and `Cambios y arreglos.docx` (fixes requested after phase 6), which are not committed. `Player Core.pdf` and `Pathfinder 2e - Player Core 2 - (OEF).pdf` in the root are the rulebooks used as the rules reference; never commit them. The work is split into phases: 1 dice ✅, 2 rules/sheet/GM tab ✅, 3 combat/initiative ✅, 4 side tabs (Dotes, Inventario, Magia, Recetas, Mascota) ✅, 5 map VFX ✅, 6 (v2 list: NPC sheets, saves, IWR, targets, spell casting, class features, more VFX) ✅.
 
 ## Commands
 
 ```bash
 npm install
-npm run dev      # Vite on :5173 (predev copies dice-box assets into public/dice-box)
+npm run dev      # Vite on :5173 (predev/prebuild copy dice-box assets into public/dice-box)
 npm run build    # tsc --noEmit && vite build. This is the only type check/lint.
 ```
 
@@ -22,13 +22,14 @@ There is no test framework. To check the parser against `public/ejemplo-pathbuil
 npx tsc src/pathbuilder.ts --ignoreConfig --outDir dist-test --module es2022 --target es2022 --skipLibCheck && node scripts/check-parser.mjs; rm -rf dist-test
 ```
 
-Other Pathbuilder samples sit untracked in the repo root (`Alquimista.json`, `Espontáneo.json`, etc.). They are the user's private characters: **don't commit them**, because the repo is public. Only `Fausto.json` is allowed.
+Other Pathbuilder samples sit untracked in the repo root (`Alquimista.json`, `Espontáneo.json`, etc.). They are the user's private characters: **don't commit them**, because the repo is public, and `.gitignore` does not cover them, so never use `git add .` / `git add -A`. Only `Fausto.json` is allowed.
 
 ## Deploy and testing
 
 - Every push to `main` deploys to GitHub Pages through `.github/workflows/deploy.yml`. Live manifest: `https://vicentesonez.github.io/owlbear-pf2e/manifest.json`.
 - `public/manifest.json` uses root-absolute paths. The `manifestBasePath` plugin in `vite.config.ts` rewrites them with `BASE_PATH` and writes `dist/version.json`.
 - Auto-update: `src/autoUpdate.ts` polls `version.json` every 60s and reloads when `__BUILD_ID__` changes. This works around the Pages cache. Every page entry calls `watchForUpdates()`.
+- `src/boot-fallback.js` is plain ES5, inlined by `vite.config.ts` at the top of every page's `<head>`. If a cached HTML points to assets that no longer exist, it reloads once; if the app crashes before rendering, it shows the error with a reload button.
 - Opening `http://localhost:5173` directly runs **standalone mode** (no OBR): live state goes to localStorage, and in DEV builds the local user is GM. DEV builds also expose `window.__pf2` for inspecting the dice overlay and live state.
 - In the built-in browser pane, Owlbear can't load a localhost manifest (`ERR_BLOCKED_BY_CLIENT`). To test inside Owlbear, push and use the Pages build.
 - The extension iframes are cross-origin, so in Owlbear use screenshots and coordinate clicks. Iframes must use `color-scheme: normal` to stay transparent.
@@ -109,7 +110,8 @@ The UI shows values that already include conditions.
 - `src/autoRoll.ts`: rolls without UI (flat checks, recovery, persistent damage).
 - `src/dice.ts`: formula parsing/evaluation and the `Dice3D` wrapper around `@3d-dice/dice-box`.
   - Dice scale is capped at 8. Above that the physics returns face 0 or -1, and roll values fall back to random.
-- `src/obr.ts`: OBR helpers (`inOwlbear`, `whenReady`, token link/unlink, `findTokenFor`).
+- `src/obr.ts`: OBR helpers (`inOwlbear`, `whenReady`, `afterReady`, token link/unlink, `findTokenFor`).
+  - OBR subscriptions (`onChange`, `onMessage`…) throw "not ready" if called before OBR_READY, which crashes the panel for players with latency. In a `useEffect`, wrap them: `return afterReady(() => OBR.x.onChange(...))`.
 - `src/background/main.ts` draws token overlays as **local** items: HP bar, AC hexagon and a condition icon row. Icons come from `public/icons/cond/*.svg`. Overlays redraw on both scene changes and live-state changes.
 
 ### Map effects (VFX)
