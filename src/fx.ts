@@ -399,14 +399,16 @@ half4 main(float2 coord) {
 // ---------- Ataques: blancos, minimalistas ----------
 
 // Cortes de samurái: una ráfaga de estelas de cuchillo muy rápidas en distintos ángulos.
-// Cada hoja deja una línea finísima donde pasó; al final todas brillan juntas y se apagan.
+// Todos pasan por el centro del objetivo. Cada hoja deja una línea finísima donde pasó;
+// al final todas brillan juntas y se apagan.
 const SLASH = `${HEADER}
 // Un corte con tiempo propio t (0..1): x = hoja, y = brillo, z = rastro
-vec3 cut(vec2 q, vec2 ax, float off, float t) {
+vec3 cut(vec2 q, vec2 ax, float t) {
   vec2 nr = vec2(-ax.y, ax.x);
   float L = 0.7;
   float x = dot(q, ax);
-  float y = dot(q, nr) - off - 0.08 * (1.0 - (x / L) * (x / L));
+  // Apenas curvo: el medio pasa por el centro y las puntas se doblan un poco
+  float y = dot(q, nr) + 0.08 * (x / L) * (x / L);
   float s = (x + L) / (2.0 * L);
   float on = step(0.001, t) * step(0.0, s) * step(s, 1.0);
   float hd = 1.0 - pow(1.0 - clamp(t / 0.55, 0.0, 1.0), 3.0);
@@ -431,8 +433,7 @@ half4 main(float2 coord) {
     float fi = float(i);
     // Ángulo áureo: cada corte cae en una dirección distinta y no se repite el patrón
     vec2 ax = rot(ax0, fi * 2.39996);
-    float off = (hash(fi * 5.1 + 1.0) - 0.5) * 0.22;
-    vec3 k = cut(q, ax, off, (p - fi * 0.12) / 0.2);
+    vec3 k = cut(q, ax, (p - fi * 0.12) / 0.2);
     blade = max(blade, k.x);
     glowA = max(glowA, k.y);
     tr = max(tr, k.z);

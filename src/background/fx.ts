@@ -56,8 +56,15 @@ async function tokenGeometry(tokenId: string) {
   return { center: b.center, dpi, radius: Math.max(b.width, b.height) / 2 / dpi };
 }
 
-async function addEffect(kind: FxKind, center: Vector2, cells: number, dpi: number, r: number, dir: Vector2 = { x: 1, y: 0 }, color?: string) {
-  const side = cells * dpi;
+// Los sombreadores están dibujados para un token mediano (radio 0,5). Para otro tamaño se
+// agranda el área en el mapa (side, en casillas) y el sombreador dibuja igual, en escala.
+const MEDIUM_R = 0.5;
+const fxScale = (radius: number) => Math.max(0.25, radius) / MEDIUM_R;
+
+async function addEffect(kind: FxKind, center: Vector2, sideCells: number, dpi: number, r: number, dir: Vector2 = { x: 1, y: 0 }, color?: string, scale = 1) {
+  const side = sideCells * dpi;
+  const cells = sideCells / scale;
+  r /= scale;
   const id = `${OVERLAY_PREFIX}-fx-${Date.now().toString(36)}-${seq++}`;
   const item = buildEffect()
     .id(id)
@@ -85,10 +92,16 @@ async function addEffect(kind: FxKind, center: Vector2, cells: number, dpi: numb
 // Efectos sobre el propio token (curación, daño, escudo, magia, rasgos de clase)
 export async function playOnToken(kind: FxKind, tokenId: string, color?: string) {
   const g = await tokenGeometry(tokenId);
-  const r = Math.max(0.5, g.radius);
-  // La salpicadura llega a las casillas de alrededor (5 pies); las llamas de la furia salen del borde del token
-  const cells = isSplashFx(kind) ? 2 * (r + 1) + 0.6 : kind === "rage" ? r * 4.2 : r * 3.2;
-  await addEffect(kind, g.center, cells, g.dpi, r, undefined, color);
+  // La salpicadura llega a las casillas de alrededor (5 pies): su área sigue la regla, sin escalar
+  if (isSplashFx(kind)) {
+    const r = Math.max(0.5, g.radius);
+    await addEffect(kind, g.center, 2 * (r + 1) + 0.6, g.dpi, r, undefined, color);
+    return;
+  }
+  const s = fxScale(g.radius);
+  // Las llamas de la furia salen del borde del token y necesitan más espacio
+  const cells = MEDIUM_R * (kind === "rage" ? 4.2 : 3.2);
+  await addEffect(kind, g.center, cells * s, g.dpi, MEDIUM_R * s, undefined, color, s);
 }
 
 const isAttack = (kind: FxKind) => ATTACK_FX.some((a) => a.id === kind);
@@ -100,18 +113,19 @@ export async function playAttack(kind: FxKind, tokenId: string, dirIndex: number
   const d = DIRS[((dirIndex % 8) + 8) % 8];
   const len = Math.hypot(d.x, d.y);
   const n = { x: d.x / len, y: d.y / len };
-  const r = Math.max(0.5, g.radius);
+  const s = fxScale(g.radius);
+  const r = MEDIUM_R * s;
   if (isRanged(kind)) {
     // Sale desde el borde del token y avanza un tramo antes de desvanecerse
-    const dist = r + RANGED_CELLS / 2;
+    const dist = r + (RANGED_CELLS + 1 - s) / 2;
     const center = { x: g.center.x + n.x * dist * g.dpi, y: g.center.y + n.y * dist * g.dpi };
-    await addEffect(kind, center, RANGED_CELLS + 1, g.dpi, r, n, color);
+    await addEffect(kind, center, RANGED_CELLS + 1, g.dpi, r, n, color, s);
     return;
   }
-  // Cuerpo a cuerpo: la casilla contigua (en diagonal, la casilla en diagonal)
-  const off = r + 0.5;
+  // Cuerpo a cuerpo: la casilla contigua (en diagonal, la casilla en diagonal), del tamaño del atacante
+  const off = r + MEDIUM_R * s;
   const center = { x: g.center.x + d.x * off * g.dpi, y: g.center.y + d.y * off * g.dpi };
-  await addEffect(kind, center, 1.7, g.dpi, r, n, color);
+  await addEffect(kind, center, 1.7 * s, g.dpi, r, n, color, s);
 }
 
 // Ataque dirigido a otro token (objetivo elegido)
@@ -123,19 +137,17 @@ export async function playAttackTo(kind: FxKind, fromId: string, toId: string, c
   const dy = (b.center.y - a.center.y) / a.dpi;
   const dist = Math.hypot(dx, dy) || 1;
   const n = { x: dx / dist, y: dy / dist };
-  const r = Math.max(0.5, a.radius);
   if (isRanged(kind)) {
-    // De centro a centro: la zona cubre todo el trayecto
-    const cells = Math.max(2, dist) + 1;
+    // De centro a centro: la zona cubre todo el trayecto; el proyectil tiene el tamaño del atacante
+    const s = fxScale(a.radius);
+    const cells = Math.max(2, dist) + s;
     const center = { x: (a.center.x + b.center.x) / 2, y: (a.center.y + b.center.y) / 2 };
-    await addEffect(kind, center, cells, a.dpi, r, n, color);
+    await addEffect(kind, center, cells, a.dpi, MEDIUM_R * s, n, color, s);
     return;
   }
-  // Cuerpo a cuerpo: sobre el borde del objetivo que mira al atacante
-  const rb = Math.max(0.5, b.radius);
-  const back = Math.max(0, rb - 0.5);
-  const center = { x: b.center.x - n.x * back * a.dpi, y: b.center.y - n.y * back * a.dpi };
-  await addEffect(kind, center, 1.7, a.dpi, r, n, color);
+  // Cuerpo a cuerpo: centrado en el objetivo y del tamaño del objetivo
+  const s = fxScale(b.radius);
+  await addEffect(kind, b.center, 1.7 * s, a.dpi, MEDIUM_R * s, n, color, s);
 }
 
 // Al cambiar de escena se pierden los items locales

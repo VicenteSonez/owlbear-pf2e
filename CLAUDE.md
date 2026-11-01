@@ -137,6 +137,7 @@ The UI shows values that already include conditions.
   - The shaders draw in cell units around the region's center, using uniforms `p` (progress 0..1), `cells` (region side), `dir` and `r` (token radius).
   - To check a shader without Owlbear, compile and render it with `canvaskit-wasm` (`CK.RuntimeEffect.Make`).
 - `src/background/fx.ts` adds them as local `EFFECT` items and advances `p` with a ~30 fps timer.
+  - Shaders are designed for a Medium token (`r` = 0.5). `addEffect(..., scale)` enlarges the map area and divides `cells`/`r` by `scale`, so the whole drawing scales with the token (`fxScale`). On-token effects and melee attacks with a target are centered on that token and use its size; ranged attacks use the attacker's size. Splash doesn't scale: its area follows the 5-ft rule.
   - Owlbear's `time` uniform is Unix seconds, too large for a GPU float to animate with.
   - In Owlbear, a STANDALONE effect's `position` is its top-left corner.
 - Triggers:
