@@ -1014,23 +1014,44 @@ half4 main(float2 coord) {
 
 // ---------- Rasgos de clase ----------
 
-// Furia: rostro animal minimalista que sube y se difumina
+// Furia: aura de llamas rojas con humo negro y brasas que suben alrededor del token
 const RAGE = `${HEADER}
 half4 main(float2 coord) {
   vec2 q = local(coord);
-  vec2 u = (q - vec2(0.0, -p * r * 0.9)) / (r * (0.9 + p * 0.4));
-  vec2 m = vec2(abs(u.x), u.y);
-  float ear = max(lineMask(segDist(m, vec2(0.35, -0.55), vec2(0.6, -0.95)), 0.07), lineMask(segDist(m, vec2(0.6, -0.95), vec2(0.7, -0.4)), 0.07));
-  float brow = lineMask(segDist(m, vec2(0.08, -0.32), vec2(0.42, -0.45)), 0.08);
-  float eye = lineMask(segDist(m, vec2(0.15, -0.2), vec2(0.38, -0.27)), 0.07);
-  float snout = lineMask(segDist(m, vec2(0.0, 0.06), vec2(0.13, 0.0)), 0.07);
-  float mouth = lineMask(abs(length(vec2(u.x, (u.y - 0.25) * 1.6)) - 0.32), 0.07) * step(0.2, u.y);
-  float fang = lineMask(segDist(m, vec2(0.16, 0.3), vec2(0.11, 0.48)), 0.07);
-  float head = lineMask(abs(length(vec2(u.x * 0.95, u.y * 1.05)) - 0.72), 0.06) * step(-0.6, u.y) * 0.6;
-  float face = max(max(max(ear, brow), max(eye, snout)), max(max(mouth, fang), head));
-  float burst = glow(q, r * 0.5) * 0.35 * show(0.0, 0.1, 0.3, 0.5);
-  vec3 c = mix(col, vec3(1.0, 0.92, 0.8), eye);
-  return col4(c, max(face * show(0.0, 0.15, 0.6, 1.0), burst) * edgeFade(q));
+  vec2 u = q / r;
+  float t = p * 3.0;
+  float d = length(u);
+  float up = clamp(-u.y, 0.0, 1.0);
+  // Ruido de fuego (sube rápido) y de humo (sube más lento)
+  vec2 fq = vec2(u.x * 3.0, u.y * 1.6 + t * 2.6);
+  float n = vnoise(fq * 1.5) * 0.55 + vnoise(fq * 3.2 + 7.0) * 0.3 + vnoise(fq * 6.5 - 3.0) * 0.15;
+  vec2 sq = vec2(u.x * 2.0, u.y * 1.2 + t * 1.6);
+  float ns = vnoise(sq * 1.8 + 11.0) * 0.65 + vnoise(sq * 4.0 - 5.0) * 0.35;
+  // Llamas en el borde: más altas arriba, cortas abajo y hueco al centro
+  float edge = d - 0.82;
+  float reach = 0.2 + up * 0.5 - clamp(u.y, 0.0, 1.0) * 0.14;
+  float hole = smoothstep(0.45, 0.85, d);
+  float body = (1.0 - smoothstep(-0.05, reach, edge + (n - 0.5) * 1.1)) * hole;
+  float flame = smoothstep(0.2, 0.85, body * (0.3 + n * 1.2));
+  float smoke = (1.0 - smoothstep(-0.1, reach + 0.25, edge + (ns - 0.5) * 0.9)) * smoothstep(0.55, 0.9, d);
+  vec3 c = vec3(0.05, 0.0, 0.0);
+  c = mix(c, col * 0.35, smoothstep(0.0, 0.45, flame));
+  c = mix(c, col * 0.9, smoothstep(0.45, 0.85, flame));
+  c = mix(c, vec3(1.0, 0.7, 0.4), smoothstep(0.9, 1.0, flame) * 0.35);
+  float a = max(smoke * 0.85, flame);
+  // Brasas que suben desde el borde
+  float emb = 0.0;
+  for (int i = 0; i < 18; i++) {
+    float fi = float(i);
+    float life = fract(hash(fi * 3.1) + t * (0.3 + hash(fi) * 0.3));
+    float ang = hash(fi * 7.3) * 6.2832;
+    vec2 e = vec2(cos(ang) + sin(life * 5.0 + fi) * 0.08, sin(ang) * 0.75 - life * 0.55);
+    emb += glow(u - e, 0.03) * (1.0 - life) * smoothstep(0.0, 0.1, life);
+  }
+  emb = min(emb * 1.5, 1.0);
+  c = mix(c, vec3(1.0, 0.75, 0.45), emb);
+  a = max(a, emb);
+  return col4(c, a * show(0.0, 0.1, 0.65, 1.0) * edgeFade(q));
 }`;
 
 // Presa: una diana se cierra sobre el objetivo
