@@ -139,8 +139,9 @@ export function NpcSheet({ tokenId, itemName, state: n, states, onPatch }: Props
     );
     if (!r?.degree) return;
     reveal();
+    // El efecto solo se ve si el ataque acierta
     const fx = a.fx ?? (a.melee ? "slash" : "arrow");
-    if (fx !== "none") playFx({ kind: fx, from: tokenId, to: fxTo });
+    if (fx !== "none" && (r.degree === "success" || r.degree === "crit-success")) playFx({ kind: fx, from: tokenId, to: fxTo });
     // Provocado: si ataca a alguien que no es el guardián queda desprevenido hasta su próximo turno
     if (taunter && `pc:${taunter.id}` !== n.target) {
       onPatch((x) => ({

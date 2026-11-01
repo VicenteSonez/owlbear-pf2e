@@ -894,9 +894,11 @@ function playFxMessage(f: RollFx, fallbackFrom?: string) {
   play.catch((err) => console.error("[PF2e] Error con un efecto", err));
 }
 
-// Ataques y conjuros: el efecto viaja con la tirada
+// Ataques y conjuros: el efecto viaja con la tirada. Si la tirada se comparó con una CA/CD
+// y falló, no se ve; sin objetivo no hay resultado y se ve igual.
 function playRollFx(entry: RollEntry) {
   if (!entry.fx) return;
+  if (entry.degree === "failure" || entry.degree === "crit-failure") return;
   if (!entry.fx.from && !entry.charId) return;
   playFxMessage(entry.fx, entry.charId ? `pc:${entry.charId}` : undefined);
 }

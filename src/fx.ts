@@ -162,7 +162,7 @@ const FX_TIMING: Partial<Record<FxKind, number>> = {
   spell: 1500,
   stars: 2800,
   slash: 650,
-  thrust: 550,
+  thrust: 600,
   impact: 650,
   arrow: 750,
   spin: 900,
@@ -201,7 +201,7 @@ const FX_TIMING: Partial<Record<FxKind, number>> = {
 };
 
 // Momento del impacto de cada ataque (fracción de su duración): ahí empieza la salpicadura
-export const IMPACT_AT: Partial<Record<FxKind, number>> = { arrow: 0.8, spin: 0.8, gun: 0.4, lob: 0.82, slash: 0.25, thrust: 0.45, impact: 0.2, flurry: 0.5 };
+export const IMPACT_AT: Partial<Record<FxKind, number>> = { arrow: 0.8, spin: 0.8, gun: 0.4, lob: 0.82, slash: 0.25, thrust: 0.18, impact: 0.2, flurry: 0.5 };
 
 export const RANGED_CELLS = 5;
 
@@ -426,31 +426,44 @@ half4 main(float2 coord) {
   return col4(c, max(moon, halo) * fade * edgeFade(q));
 }`;
 
-// Estocada: una punta fina que sale hacia la casilla y vuelve
+// Estocada de viento: una hoja de acero afilada que atraviesa el objetivo de un golpe,
+// con líneas de viento a los lados y un destello en cruz al impactar
 const THRUST = `${HEADER}
+// Estela entre la cola (t0) y la punta (t1): cola larga y fina, lo más ancho justo detrás de la punta afilada
+float blade(float x, float y, float t0, float t1, float w) {
+  float f = (x - t0) / max(t1 - t0, 0.001);
+  float inside = step(0.0, f) * step(f, 1.0);
+  float wd = w * 4.7 * pow(clamp(f, 0.0, 1.0), 2.0) * pow(clamp(1.0 - f, 0.0, 1.0), 0.7);
+  return (1.0 - smoothstep(wd * 0.5, wd + 0.003, abs(y))) * inside;
+}
 half4 main(float2 coord) {
   vec2 q = local(coord);
   vec2 pr = vec2(-dir.y, dir.x);
-  float ext = sin(clamp(p / 0.75, 0.0, 1.0) * 3.14159);
-  vec2 s0 = -dir * 0.7;
-  float L = 1.25 * ext;
-  vec2 v = q - s0;
-  float u = dot(v, dir);
-  float w = abs(dot(v, pr));
-  float h = clamp(u / max(L, 0.001), 0.0, 1.0);
-  float width = 0.06 * (1.0 - h);
-  float spike = (1.0 - smoothstep(width * 0.6, width + 0.004, w)) * step(0.0, u) * step(u, L);
-  vec2 tip = s0 + dir * L;
-  float flash = exp(-length(q - tip) / 0.07) * smoothstep(0.3, 0.5, p) * (1.0 - smoothstep(0.5, 0.8, p));
-  float lines = 0.0;
-  for (int i = 0; i < 3; i++) {
-    float fi = float(i) - 1.0;
-    vec2 a0 = s0 + pr * fi * 0.18 + dir * 0.1;
-    float sd = segDist(q, a0, a0 + dir * 0.6 * ext);
-    lines = max(lines, (1.0 - smoothstep(0.004, 0.012, sd)) * 0.45 * ext);
+  float x = dot(q, dir);
+  float y = dot(q, pr);
+  // La punta sale disparada y la cola la alcanza
+  float tip = mix(-0.75, 0.8, 1.0 - pow(1.0 - clamp(p / 0.2, 0.0, 1.0), 3.0));
+  float tail = mix(-0.85, 0.7, pow(clamp((p - 0.08) / 0.5, 0.0, 1.0), 1.4));
+  float core = blade(x, y, tail, tip, 0.1);
+  float edge = blade(x, y, tail - 0.05, tip + 0.03, 0.16) * 0.45;
+  // Viento: líneas finas que ondulan a los lados, un poco atrasadas respecto de la hoja
+  float wind = 0.0;
+  for (int i = 0; i < 4; i++) {
+    float fi = float(i);
+    float side = mod(fi, 2.0) * 2.0 - 1.0;
+    float off = side * (0.1 + floor(fi / 2.0) * 0.08);
+    float lag = 0.04 + fi * 0.03;
+    float t1 = mix(-0.75, 0.65, 1.0 - pow(1.0 - clamp((p - lag) / 0.25, 0.0, 1.0), 3.0));
+    float t0 = mix(-0.8, 0.6, pow(clamp((p - lag - 0.05) / 0.45, 0.0, 1.0), 1.3));
+    float yy = y - off - sin(x * 9.0 + fi * 2.0 - p * 20.0) * 0.015;
+    wind = max(wind, blade(x, yy, t0, t1, 0.018) * 0.7);
   }
-  float a = max(max(spike, flash), lines) * (1.0 - smoothstep(0.85, 1.0, p));
-  return col4(vec3(1.0), (a) * edgeFade(q));
+  // Destello en cruz donde la punta atraviesa el centro
+  float hit = show(0.12, 0.18, 0.22, 0.42);
+  float flash = min(sparkle(q, 0.3), 1.0) * hit;
+  float a = max(max(core, edge), max(wind, flash)) * (1.0 - smoothstep(0.45, 0.65, p));
+  vec3 c = mix(vec3(0.7, 0.92, 1.0), vec3(1.0), max(core, flash));
+  return col4(c, a * edgeFade(q));
 }`;
 
 // Impacto sólido: onda que se expande, rayos y destello en el centro
