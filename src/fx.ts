@@ -161,7 +161,7 @@ const FX_TIMING: Partial<Record<FxKind, number>> = {
   shield: 950,
   spell: 1500,
   stars: 2800,
-  slash: 850,
+  slash: 650,
   thrust: 550,
   impact: 650,
   arrow: 750,
@@ -201,7 +201,7 @@ const FX_TIMING: Partial<Record<FxKind, number>> = {
 };
 
 // Momento del impacto de cada ataque (fracción de su duración): ahí empieza la salpicadura
-export const IMPACT_AT: Partial<Record<FxKind, number>> = { arrow: 0.8, spin: 0.8, gun: 0.4, lob: 0.82, slash: 0.15, thrust: 0.45, impact: 0.2, flurry: 0.5 };
+export const IMPACT_AT: Partial<Record<FxKind, number>> = { arrow: 0.8, spin: 0.8, gun: 0.4, lob: 0.82, slash: 0.25, thrust: 0.45, impact: 0.2, flurry: 0.5 };
 
 export const RANGED_CELLS = 5;
 
@@ -398,51 +398,32 @@ half4 main(float2 coord) {
 
 // ---------- Ataques: blancos, minimalistas ----------
 
-// Cortes de samurái: una ráfaga de estelas de cuchillo muy rápidas en distintos ángulos.
-// Todos pasan por el centro del objetivo. Cada hoja deja una línea finísima donde pasó;
-// al final todas brillan juntas y se apagan.
+// Tajo grueso: una media luna blanca que barre el objetivo de un lado al otro, con el lomo
+// hacia afuera. Lo primero que barrió es lo primero que se adelgaza, se agrisa y desaparece.
 const SLASH = `${HEADER}
-// Un corte con tiempo propio t (0..1): x = hoja, y = brillo, z = rastro
-vec3 cut(vec2 q, vec2 ax, float t) {
-  vec2 nr = vec2(-ax.y, ax.x);
-  float L = 0.7;
-  float x = dot(q, ax);
-  // Apenas curvo: el medio pasa por el centro y las puntas se doblan un poco
-  float y = dot(q, nr) + 0.08 * (x / L) * (x / L);
-  float s = (x + L) / (2.0 * L);
-  float on = step(0.001, t) * step(0.0, s) * step(s, 1.0);
-  float hd = 1.0 - pow(1.0 - clamp(t / 0.55, 0.0, 1.0), 3.0);
-  float tl = pow(clamp((t - 0.15) / 0.75, 0.0, 1.0), 1.5);
-  float f = (s - tl) / max(hd - tl, 0.001);
-  // La hoja se apaga apenas termina de cruzar, para que no quede una gota en la punta
-  float inSeg = step(0.0, f) * step(f, 1.0) * on * (1.0 - smoothstep(0.5, 0.7, t));
-  float w = 0.06 * pow(clamp(f, 0.0, 1.0), 0.8) * sqrt(clamp((1.0 - f) / 0.12, 0.0, 1.0));
-  float core = (1.0 - smoothstep(w * 0.45, w, abs(y))) * inSeg;
-  float halo = exp(-abs(y) / (w * 0.7 + 0.008)) * 0.4 * inSeg * smoothstep(0.0, 0.3, f);
-  float trace = (1.0 - smoothstep(0.004, 0.009, abs(y))) * step(s, hd) * smoothstep(0.0, 0.15, s) * (1.0 - smoothstep(0.85, 1.0, s)) * on;
-  return vec3(core, halo, trace);
-}
 half4 main(float2 coord) {
   vec2 q = local(coord);
   vec2 pr = vec2(-dir.y, dir.x);
-  vec2 ax0 = normalize(pr + dir * 0.45);
-  float blade = 0.0;
-  float glowA = 0.0;
-  float tr = 0.0;
-  for (int i = 0; i < 5; i++) {
-    float fi = float(i);
-    // Ángulo áureo: cada corte cae en una dirección distinta y no se repite el patrón
-    vec2 ax = rot(ax0, fi * 2.39996);
-    vec3 k = cut(q, ax, (p - fi * 0.12) / 0.2);
-    blade = max(blade, k.x);
-    glowA = max(glowA, k.y);
-    tr = max(tr, k.z);
-  }
-  float flash = show(0.62, 0.7, 0.74, 0.95);
-  float trA = tr * (0.3 + flash * 0.7) * (1.0 - smoothstep(0.85, 1.0, p));
-  float a = max(max(blade, glowA) * (1.0 - smoothstep(0.75, 0.85, p)), trA);
-  vec3 c = mix(vec3(0.85, 0.93, 1.0), vec3(1.0), max(blade, flash * tr));
-  return col4(c, a * edgeFade(q));
+  vec2 o = -dir * 0.18;
+  vec2 v = q - o;
+  // Ángulo alrededor del centro de la luna: 0 mira hacia afuera (lejos del atacante)
+  float ang = atan(dot(v, pr), dot(v, dir));
+  float amax = 2.2;
+  float s = clamp((amax + ang) / (2.0 * amax), 0.0, 1.0);
+  float hd = 1.0 - pow(1.0 - clamp(p / 0.3, 0.0, 1.0), 2.5);
+  float rev = smoothstep(hd + 0.03, hd - 0.05, s);
+  // Tiempo desde que la hoja pasó por este ángulo
+  float life = p - s * 0.3;
+  // Media luna = círculo grande menos uno corrido hacia el atacante; al apagarse se adelgaza
+  float R = 0.65;
+  float sh = 0.24 * (1.0 - 0.75 * smoothstep(0.12, 0.5, life));
+  float outer = 1.0 - smoothstep(R - 0.012, R, length(v));
+  float inner = 1.0 - smoothstep(R - 0.03 - 0.012, R - 0.03, length(v + dir * sh));
+  float moon = clamp(outer - inner, 0.0, 1.0) * rev;
+  float halo = exp(-max(length(v) - R, 0.0) / 0.03) * (1.0 - outer) * rev * 0.35 * step(0.0, dot(v, dir) + 0.2);
+  float fade = 1.0 - smoothstep(0.25, 0.55, life);
+  vec3 c = mix(vec3(0.72, 0.74, 0.8), vec3(1.0), 1.0 - smoothstep(0.08, 0.35, life));
+  return col4(c, max(moon, halo) * fade * edgeFade(q));
 }`;
 
 // Estocada: una punta fina que sale hacia la casilla y vuelve
