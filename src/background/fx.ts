@@ -86,8 +86,8 @@ async function addEffect(kind: FxKind, center: Vector2, cells: number, dpi: numb
 export async function playOnToken(kind: FxKind, tokenId: string, color?: string) {
   const g = await tokenGeometry(tokenId);
   const r = Math.max(0.5, g.radius);
-  // La salpicadura llega a las casillas de alrededor (5 pies)
-  const cells = isSplashFx(kind) ? 2 * (r + 1) + 0.6 : r * 3.2;
+  // La salpicadura llega a las casillas de alrededor (5 pies); las llamas de la furia salen del borde del token
+  const cells = isSplashFx(kind) ? 2 * (r + 1) + 0.6 : kind === "rage" ? r * 4.2 : r * 3.2;
   await addEffect(kind, g.center, cells, g.dpi, r, undefined, color);
 }
 

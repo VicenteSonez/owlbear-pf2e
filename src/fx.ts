@@ -1028,12 +1028,12 @@ half4 main(float2 coord) {
   vec2 sq = vec2(u.x * 2.0, u.y * 1.2 + t * 1.6);
   float ns = vnoise(sq * 1.8 + 11.0) * 0.65 + vnoise(sq * 4.0 - 5.0) * 0.35;
   // Llamas en el borde: más altas arriba, cortas abajo y hueco al centro
-  float edge = d - 0.82;
+  float edge = d - 1.0;
   float reach = 0.2 + up * 0.5 - clamp(u.y, 0.0, 1.0) * 0.14;
-  float hole = smoothstep(0.45, 0.85, d);
+  float hole = smoothstep(0.86, 0.98, d);
   float body = (1.0 - smoothstep(-0.05, reach, edge + (n - 0.5) * 1.1)) * hole;
   float flame = smoothstep(0.2, 0.85, body * (0.3 + n * 1.2));
-  float smoke = (1.0 - smoothstep(-0.1, reach + 0.25, edge + (ns - 0.5) * 0.9)) * smoothstep(0.55, 0.9, d);
+  float smoke = (1.0 - smoothstep(-0.1, reach + 0.25, edge + (ns - 0.5) * 0.9)) * smoothstep(0.92, 1.05, d);
   vec3 c = vec3(0.05, 0.0, 0.0);
   c = mix(c, col * 0.35, smoothstep(0.0, 0.45, flame));
   c = mix(c, col * 0.9, smoothstep(0.45, 0.85, flame));
@@ -1045,7 +1045,7 @@ half4 main(float2 coord) {
     float fi = float(i);
     float life = fract(hash(fi * 3.1) + t * (0.3 + hash(fi) * 0.3));
     float ang = hash(fi * 7.3) * 6.2832;
-    vec2 e = vec2(cos(ang) + sin(life * 5.0 + fi) * 0.08, sin(ang) * 0.75 - life * 0.55);
+    vec2 e = vec2(cos(ang) * 1.1 + sin(life * 5.0 + fi) * 0.08, sin(ang) * 1.05 - life * 0.55);
     emb += glow(u - e, 0.03) * (1.0 - life) * smoothstep(0.0, 0.1, life);
   }
   emb = min(emb * 1.5, 1.0);
