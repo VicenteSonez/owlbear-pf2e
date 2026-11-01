@@ -398,30 +398,29 @@ half4 main(float2 coord) {
 
 // ---------- Ataques: blancos, minimalistas ----------
 
-// Cortes fugaces: dos medialunas que barren la casilla de al lado
+// Corte de cuchillo: una estela blanca, apenas curva, que cruza la casilla en diagonal.
+// La punta va adelante y la cola la sigue y se adelgaza hasta desaparecer.
 const SLASH = `${HEADER}
 half4 main(float2 coord) {
   vec2 q = local(coord);
   vec2 pr = vec2(-dir.y, dir.x);
-  float a = 0.0;
-  for (int i = 0; i < 2; i++) {
-    float fi = float(i);
-    float t = clamp((p - fi * 0.22) / 0.6, 0.0, 1.0);
-    float side = fi * 2.0 - 1.0;
-    vec2 c = -dir * 0.35 + pr * side * 0.08;
-    vec2 v = q - c;
-    float u = dot(v, dir);
-    float w = dot(v, pr) * side;
-    float rel = atan(w, u);
-    float head = mix(-1.3, 1.3, t);
-    float span = clamp((rel - (head - 1.1)) / 1.1, 0.0, 1.0) * step(rel, head);
-    float R = 0.6;
-    float thick = 0.1 * span;
-    float arc = 1.0 - smoothstep(thick * 0.5, thick, abs(length(v) - R));
-    float on = step(0.001, t) * (1.0 - smoothstep(0.75, 1.0, t));
-    a = max(a, arc * span * on);
-  }
-  return col4(vec3(1.0), (a) * edgeFade(q));
+  vec2 ax = normalize(pr + dir * 0.45);
+  vec2 nr = vec2(-ax.y, ax.x);
+  float L = 0.68;
+  float x = dot(q, ax);
+  float y = dot(q, nr) - 0.12 * (1.0 - (x / L) * (x / L));
+  float s = (x + L) / (2.0 * L);
+  float hd = 1.0 - pow(1.0 - clamp(p / 0.4, 0.0, 1.0), 3.0);
+  float tl = pow(clamp((p - 0.12) / 0.55, 0.0, 1.0), 1.5);
+  float f = (s - tl) / max(hd - tl, 0.001);
+  float inSeg = step(0.0, f) * step(f, 1.0) * step(0.0, s) * step(s, 1.0);
+  float w = 0.075 * pow(clamp(f, 0.0, 1.0), 0.8) * sqrt(clamp((1.0 - f) / 0.12, 0.0, 1.0));
+  float core = (1.0 - smoothstep(w * 0.45, w, abs(y))) * inSeg;
+  float halo = exp(-abs(y) / (w * 0.7 + 0.008)) * 0.4 * inSeg * smoothstep(0.0, 0.3, f);
+  float tip = glow(q - ax * (hd * 2.0 - 1.0) * L - nr * 0.12 * (1.0 - (hd * 2.0 - 1.0) * (hd * 2.0 - 1.0)), 0.04) * show(0.0, 0.02, 0.35, 0.45);
+  float a = max(max(core, halo), tip) * (1.0 - smoothstep(0.7, 1.0, p));
+  vec3 c = mix(vec3(0.85, 0.93, 1.0), vec3(1.0), core);
+  return col4(c, a * edgeFade(q));
 }`;
 
 // Estocada: una punta fina que sale hacia la casilla y vuelve
