@@ -161,7 +161,7 @@ const FX_TIMING: Partial<Record<FxKind, number>> = {
   shield: 950,
   spell: 1500,
   stars: 2800,
-  slash: 600,
+  slash: 850,
   thrust: 550,
   impact: 650,
   arrow: 750,
@@ -201,7 +201,7 @@ const FX_TIMING: Partial<Record<FxKind, number>> = {
 };
 
 // Momento del impacto de cada ataque (fracción de su duración): ahí empieza la salpicadura
-export const IMPACT_AT: Partial<Record<FxKind, number>> = { arrow: 0.8, spin: 0.8, gun: 0.4, lob: 0.82, slash: 0.4, thrust: 0.45, impact: 0.2, flurry: 0.5 };
+export const IMPACT_AT: Partial<Record<FxKind, number>> = { arrow: 0.8, spin: 0.8, gun: 0.4, lob: 0.82, slash: 0.15, thrust: 0.45, impact: 0.2, flurry: 0.5 };
 
 export const RANGED_CELLS = 5;
 
@@ -398,28 +398,49 @@ half4 main(float2 coord) {
 
 // ---------- Ataques: blancos, minimalistas ----------
 
-// Corte de cuchillo: una estela blanca, apenas curva, que cruza la casilla en diagonal.
-// La punta va adelante y la cola la sigue y se adelgaza hasta desaparecer.
+// Cortes de samurái: una ráfaga de estelas de cuchillo muy rápidas en distintos ángulos.
+// Cada hoja deja una línea finísima donde pasó; al final todas brillan juntas y se apagan.
 const SLASH = `${HEADER}
+// Un corte con tiempo propio t (0..1): x = hoja, y = brillo, z = rastro
+vec3 cut(vec2 q, vec2 ax, float off, float t) {
+  vec2 nr = vec2(-ax.y, ax.x);
+  float L = 0.7;
+  float x = dot(q, ax);
+  float y = dot(q, nr) - off - 0.08 * (1.0 - (x / L) * (x / L));
+  float s = (x + L) / (2.0 * L);
+  float on = step(0.001, t) * step(0.0, s) * step(s, 1.0);
+  float hd = 1.0 - pow(1.0 - clamp(t / 0.55, 0.0, 1.0), 3.0);
+  float tl = pow(clamp((t - 0.15) / 0.75, 0.0, 1.0), 1.5);
+  float f = (s - tl) / max(hd - tl, 0.001);
+  // La hoja se apaga apenas termina de cruzar, para que no quede una gota en la punta
+  float inSeg = step(0.0, f) * step(f, 1.0) * on * (1.0 - smoothstep(0.5, 0.7, t));
+  float w = 0.06 * pow(clamp(f, 0.0, 1.0), 0.8) * sqrt(clamp((1.0 - f) / 0.12, 0.0, 1.0));
+  float core = (1.0 - smoothstep(w * 0.45, w, abs(y))) * inSeg;
+  float halo = exp(-abs(y) / (w * 0.7 + 0.008)) * 0.4 * inSeg * smoothstep(0.0, 0.3, f);
+  float trace = (1.0 - smoothstep(0.004, 0.009, abs(y))) * step(s, hd) * smoothstep(0.0, 0.15, s) * (1.0 - smoothstep(0.85, 1.0, s)) * on;
+  return vec3(core, halo, trace);
+}
 half4 main(float2 coord) {
   vec2 q = local(coord);
   vec2 pr = vec2(-dir.y, dir.x);
-  vec2 ax = normalize(pr + dir * 0.45);
-  vec2 nr = vec2(-ax.y, ax.x);
-  float L = 0.68;
-  float x = dot(q, ax);
-  float y = dot(q, nr) - 0.12 * (1.0 - (x / L) * (x / L));
-  float s = (x + L) / (2.0 * L);
-  float hd = 1.0 - pow(1.0 - clamp(p / 0.4, 0.0, 1.0), 3.0);
-  float tl = pow(clamp((p - 0.12) / 0.55, 0.0, 1.0), 1.5);
-  float f = (s - tl) / max(hd - tl, 0.001);
-  float inSeg = step(0.0, f) * step(f, 1.0) * step(0.0, s) * step(s, 1.0);
-  float w = 0.075 * pow(clamp(f, 0.0, 1.0), 0.8) * sqrt(clamp((1.0 - f) / 0.12, 0.0, 1.0));
-  float core = (1.0 - smoothstep(w * 0.45, w, abs(y))) * inSeg;
-  float halo = exp(-abs(y) / (w * 0.7 + 0.008)) * 0.4 * inSeg * smoothstep(0.0, 0.3, f);
-  float tip = glow(q - ax * (hd * 2.0 - 1.0) * L - nr * 0.12 * (1.0 - (hd * 2.0 - 1.0) * (hd * 2.0 - 1.0)), 0.04) * show(0.0, 0.02, 0.35, 0.45);
-  float a = max(max(core, halo), tip) * (1.0 - smoothstep(0.7, 1.0, p));
-  vec3 c = mix(vec3(0.85, 0.93, 1.0), vec3(1.0), core);
+  vec2 ax0 = normalize(pr + dir * 0.45);
+  float blade = 0.0;
+  float glowA = 0.0;
+  float tr = 0.0;
+  for (int i = 0; i < 5; i++) {
+    float fi = float(i);
+    // Ángulo áureo: cada corte cae en una dirección distinta y no se repite el patrón
+    vec2 ax = rot(ax0, fi * 2.39996);
+    float off = (hash(fi * 5.1 + 1.0) - 0.5) * 0.22;
+    vec3 k = cut(q, ax, off, (p - fi * 0.12) / 0.2);
+    blade = max(blade, k.x);
+    glowA = max(glowA, k.y);
+    tr = max(tr, k.z);
+  }
+  float flash = show(0.62, 0.7, 0.74, 0.95);
+  float trA = tr * (0.3 + flash * 0.7) * (1.0 - smoothstep(0.85, 1.0, p));
+  float a = max(max(blade, glowA) * (1.0 - smoothstep(0.75, 0.85, p)), trA);
+  vec3 c = mix(vec3(0.85, 0.93, 1.0), vec3(1.0), max(blade, flash * tr));
   return col4(c, a * edgeFade(q));
 }`;
 
