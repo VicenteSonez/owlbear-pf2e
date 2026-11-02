@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { fmtMod, type Character } from "../pathbuilder";
 import type { PcState } from "../live";
 import { extrasStore } from "../extras";
-import { DEGREE_LABEL, checkAdjust, levelDc, modsText, stackMods } from "../rules";
+import { DEGREE_LABEL, autoIwr, checkAdjust, levelDc, modsText, stackMods } from "../rules";
 import { ikonCheckMods } from "../classes";
 import { SAVE_LABEL, newId, npcLabel, type SaveKey } from "../shared";
 import {
@@ -15,7 +15,7 @@ import {
   type SaveEffect,
   type SaveTarget,
 } from "../requests";
-import { basicSaveDamage, dealDamage, parseTargetKey } from "../damage";
+import { NO_IWR, basicSaveDamage, dealDamage, finalParts, mergeParts, parseTargetKey, readTarget } from "../damage";
 import { autoRoll } from "../autoRoll";
 import { useSceneTokens } from "./hooks";
 import { useActions } from "./ctx";
@@ -31,6 +31,7 @@ export interface SaveDefaults {
   fear?: boolean;
   dmg?: string;
   ty?: string;
+  dmg2?: { f: string; ty: string }[];
 }
 
 // Posibles objetivos: PJ (y mascotas) de la sala y PNJ de la escena
@@ -85,6 +86,7 @@ export function SaveRequestForm(props: {
       fear: fear || undefined,
       dmg: dmg.trim() || undefined,
       ty: ty.trim() || undefined,
+      dmg2: d.dmg2?.length ? d.dmg2 : undefined,
       from: props.from.id,
       fromName: props.from.name,
       targets,
@@ -139,6 +141,7 @@ export function SaveRequestForm(props: {
         </label>
         <input className="sm2" placeholder="Daño (2d6)" value={dmg} onChange={(e) => setDmg(e.target.value)} />
         <input className="sm2" list="pf2-damage-types" placeholder="Tipo" value={ty} onChange={(e) => setTy(e.target.value)} />
+        {d.dmg2?.length ? <span className="muted small">+ {d.dmg2.map((x) => `${x.f} ${x.ty}`.trim()).join(" + ")}</span> : null}
         <DamageTypeList />
       </div>
       <div className="sf-targets">
@@ -253,11 +256,15 @@ export function SaveEffectsList(props: {
     if (!e.dmg || busy) return;
     setBusy(true);
     try {
-      let rolled: number;
+      // Se tira cada tipo de daño una vez; a cada objetivo se le aplica según su grado y sus resistencias por tipo
+      const specs = [{ f: e.dmg, ty: e.ty ?? "" }, ...(e.dmg2 ?? [])];
+      const rolled: { amt: number; ty: string }[] = [];
       try {
-        const entry = autoRoll({ playerId: meId, playerName: "GM", playerColor: "#e8622c" }, e.fromName, `${e.name}: daño`, e.dmg, "damage");
-        rolled = entry.total;
-        await publish({ ...entry, secret: true });
+        for (const sp of specs) {
+          const entry = autoRoll({ playerId: meId, playerName: "GM", playerColor: "#e8622c" }, e.fromName, `${e.name}: daño${sp.ty ? ` ${sp.ty}` : ""}`, sp.f, "damage");
+          rolled.push({ amt: entry.total, ty: sp.ty });
+          await publish({ ...entry, secret: true });
+        }
       } catch {
         return;
       }
@@ -265,10 +272,15 @@ export function SaveEffectsList(props: {
         const rk = resultKey(e.id, t.k);
         const res = saveResults.all()[rk];
         if (!res || res.applied !== undefined) continue;
-        const amount = e.basic ? basicSaveDamage(rolled, res.degree) : res.degree.includes("success") ? 0 : rolled;
         const ref = parseTargetKey(t.k);
-        const out = ref && amount > 0 ? await dealDamage(ref, amount, { type: e.ty }) : { total: 0, notes: "" };
-        await saveResults.set(rk, { ...res, applied: out.total });
+        const parts = mergeParts(rolled.map((p) => ({ ...p, amt: e.basic ? basicSaveDamage(p.amt, res.degree) : res.degree.includes("success") ? 0 : p.amt })));
+        let applied = 0;
+        if (ref && parts.some((p) => p.amt > 0)) {
+          const info = await readTarget(ref);
+          const fin = finalParts(parts, info?.iwr, parts.map((p) => autoIwr(info?.iwr, p.ty)));
+          applied = fin.total > 0 ? (await dealDamage(ref, fin.total, { pick: NO_IWR })).total : 0;
+        }
+        await saveResults.set(rk, { ...res, applied });
       }
     } finally {
       setBusy(false);
@@ -330,7 +342,7 @@ export function SaveEffectsList(props: {
             {isGm && e.dmg && (
               <div className="se-foot">
                 <button className="btn small-btn danger" disabled={busy || !done} onClick={() => applyBasic(e)} title="Tira el daño y lo aplica a quienes ya tiraron">
-                  Aplicar daño {e.dmg} {e.ty ?? ""} {e.basic ? "(básica)" : "(a quien falle)"}
+                  Aplicar daño {[`${e.dmg} ${e.ty ?? ""}`.trim(), ...(e.dmg2 ?? []).map((x) => `${x.f} ${x.ty}`.trim())].join(" + ")} {e.basic ? "(básica)" : "(a quien falle)"}
                 </button>
               </div>
             )}

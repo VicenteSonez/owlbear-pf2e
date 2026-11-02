@@ -27,6 +27,8 @@ export interface NpcCombatant {
   name: string;
   tokenId?: string;
   mod: number;
+  // Con qué tiró (Percepción, Sigilo…), si viene de su ficha
+  lbl?: string;
   init: number | null;
   tb?: number;
   // Oculto a los jugadores en la lista de iniciativa

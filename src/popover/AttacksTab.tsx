@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { fmtMod, type Character, type RuneDamage, type Weapon, type WeaponRune } from "../pathbuilder";
 import type { PcState } from "../live";
-import { BONUS_LABEL, FLAT_LABEL, MATERIALS, checkAdjust, hiddenFrom, modsText, targetFlatDc, type BonusType, type Degree } from "../rules";
+import { FLAT_LABEL, MATERIALS, checkAdjust, hiddenFrom, modsText, targetFlatDc, type Degree } from "../rules";
 import { applyWeaponFlags, extraKey, store, type WeaponFlags } from "../storage";
 import { newId } from "../shared";
-import type { CustomMod, CustomWeapon, Extras } from "../extras";
+import type { CustomWeapon, Extras } from "../extras";
 import { parseFormula } from "../dice";
 import { ATTACK_FX, IMPACT_AT, SPLASH_FX, defaultWeaponFx, fxTiming, type AttackFx, type SplashFx } from "../fx";
 import { featuresOf, guessSlinger, type SlingerKind } from "../classes";
@@ -18,6 +18,7 @@ import { NpcPicker, useNpcOptions } from "./NpcPicker";
 import { useActions } from "./ctx";
 import { spellstrikeStep } from "./classActions";
 import { DamageTypeList } from "./DamageBox";
+import { ModsEditor } from "./ModsEditor";
 import { FxColors } from "./FxColors";
 import { EditableName } from "./side/common";
 import { NpcStatus } from "./NpcStatus";
@@ -26,7 +27,6 @@ import { setIn } from "./side/types";
 import { useSceneTokens } from "./hooks";
 import { distancesFrom } from "./splash";
 
-const isDice = (t: string) => /d/i.test(t);
 const validFormula = (t: string) => {
   try {
     parseFormula(t);
@@ -52,138 +52,6 @@ interface Props {
   onPatch: (fn: (s: PcState) => PcState) => void;
 }
 
-// Bonos y penalizadores del jugador para ataque y daño
-function CustomMods({ extras, canEdit, update }: { extras: Extras; canEdit: boolean; update: (fn: (e: Extras) => Extras) => void }) {
-  const [open, setOpen] = useState(false);
-  const [label, setLabel] = useState("");
-  const [value, setValue] = useState("");
-  const [type, setType] = useState<BonusType>("circumstance");
-  const [to, setTo] = useState<CustomMod["to"]>("atk");
-  const [dt, setDt] = useState("");
-  const [pers, setPers] = useState(false);
-  const [critOnly, setCritOnly] = useState(false);
-  const [perDie, setPerDie] = useState(false);
-  const [splash, setSplash] = useState(false);
-  const [error, setError] = useState("");
-  const mods = extras.mods ?? [];
-  const active = mods.filter((m) => m.on);
-  const set = (fn: (l: CustomMod[]) => CustomMod[]) => update((x) => ({ ...x, mods: fn(x.mods ?? []) }));
-  return (
-    <div className="custom-mods">
-      <button className="cm-head" onClick={() => setOpen((o) => !o)}>
-        <b>Bonos y penalizadores</b>
-        <span className="muted small">
-          {active.length ? active.map((m) => `${m.label || "Ajuste"} ${modValueText(m)}`).join(" · ") : "Ninguno activo"}
-        </span>
-        <span className="muted">{open ? "▴" : "▾"}</span>
-      </button>
-      {open && (
-        <div className="cm-body">
-          {mods.map((m) => (
-            <div key={m.id} className="cm-row">
-              <button className={`chip ${m.on ? "on" : ""}`} disabled={!canEdit} onClick={() => set((l) => l.map((x) => (x.id === m.id ? { ...x, on: !x.on } : x)))}>
-                {m.on ? "Activo" : "Apagado"}
-              </button>
-              <span className="cm-label">{m.label || "Ajuste"}</span>
-              <b className={m.value < 0 ? "down" : "up"}>{modValueText(m)}</b>
-              <span className="muted small">
-                {m.dice || m.pers || m.splash ? "" : `${BONUS_LABEL[m.type]} · `}
-                {m.to === "atk" ? "ataque" : m.pers ? "daño persistente" : m.splash ? "salpicadura" : "daño"}
-                {m.dt ? ` · ${m.dt}` : ""}
-                {m.perDie ? " · por dado" : ""}
-                {m.critOnly ? " · solo crítico" : ""}
-              </span>
-              {canEdit && (
-                <button className="row-x" title="Quitar" onClick={() => set((l) => l.filter((x) => x.id !== m.id))}>
-                  ✕
-                </button>
-              )}
-            </div>
-          ))}
-          {canEdit && (
-            <form
-              className="cm-form"
-              onSubmit={(e) => {
-                e.preventDefault();
-                const raw = value.trim().replace(/^\+/, "");
-                const dmg = to === "dmg";
-                const extra = {
-                  dt: dmg ? dt.trim() || undefined : undefined,
-                  pers: (dmg && pers) || undefined,
-                  critOnly: (dmg && critOnly) || undefined,
-                  perDie: (dmg && perDie) || undefined,
-                  splash: (dmg && splash && !pers) || undefined,
-                };
-                // Al daño se puede escribir un dado (1d4) con su tipo
-                if (dmg && isDice(raw)) {
-                  if (!validFormula(raw)) {
-                    setError("Fórmula no válida (ej. 1d4, 2d6)");
-                    return;
-                  }
-                  set((l) => [...l, { id: newId(), label: label.trim(), value: 0, type: "untyped", to, on: true, dice: raw, ...extra }]);
-                } else {
-                  const v = parseInt(raw.replace(/[^\d-]/g, ""), 10);
-                  if (!Number.isFinite(v) || !v) {
-                    setError(dmg ? "Escribe un número (+1) o un dado (1d4)" : "Escribe un número (+1, −2)");
-                    return;
-                  }
-                  set((l) => [...l, { id: newId(), label: label.trim(), value: v, type: pers || splash ? "untyped" : type, to, on: true, ...extra }]);
-                }
-                setError("");
-                setLabel("");
-                setValue("");
-                setDt("");
-                setPers(false);
-                setCritOnly(false);
-                setPerDie(false);
-                setSplash(false);
-              }}
-            >
-              <input placeholder="Nombre (Bendecir…)" value={label} onChange={(e) => setLabel(e.target.value)} />
-              <input className="sm" placeholder={to === "dmg" ? "+1 / 1d4" : "+1"} value={value} onChange={(e) => setValue(e.target.value)} />
-              <select value={type} disabled={to === "dmg" && (isDice(value) || pers || splash)} title="Tipo de bono (los dados, el persistente y la salpicadura no se apilan por tipo)" onChange={(e) => setType(e.target.value as BonusType)}>
-                <option value="status">Estado</option>
-                <option value="circumstance">Circunstancial</option>
-                <option value="item">Objeto</option>
-                <option value="untyped">Sin tipo</option>
-              </select>
-              <select value={to} onChange={(e) => setTo(e.target.value as CustomMod["to"])}>
-                <option value="atk">Ataque</option>
-                <option value="dmg">Daño</option>
-              </select>
-              {to === "dmg" && (
-                <>
-                  <input className="md" list="pf2-damage-types" placeholder="Tipo de daño" value={dt} onChange={(e) => setDt(e.target.value)} />
-                  <label className="te-check" title="Se multiplica por los dados de daño del arma (dado base + runas de golpe)">
-                    <input type="checkbox" checked={perDie} onChange={(e) => setPerDie(e.target.checked)} /> Por dado
-                  </label>
-                  <label className="te-check" title="Se agrega al objetivo como daño persistente">
-                    <input type="checkbox" checked={pers} onChange={(e) => setPers(e.target.checked)} /> Persistente
-                  </label>
-                  <label className="te-check" title="Daño de salpicadura: al objetivo y, con un éxito, a los que estén a 5 pies">
-                    <input type="checkbox" checked={splash} onChange={(e) => setSplash(e.target.checked)} /> Salpicadura
-                  </label>
-                  <label className="te-check" title="Solo con crítico; ese daño no se multiplica">
-                    <input type="checkbox" checked={critOnly} onChange={(e) => setCritOnly(e.target.checked)} /> Solo crítico
-                  </label>
-                  <DamageTypeList />
-                </>
-              )}
-              <button className="btn">+</button>
-            </form>
-          )}
-          {error && <p className="error small">{error}</p>}
-          <p className="muted small">
-            Del mismo tipo solo cuenta el mayor bono y el peor penalizador; los sin tipo se suman. Al daño también puedes poner dados (1d4) con su tipo, daño
-            persistente o de salpicadura, y que sea por cada dado del arma. Lo de “solo crítico” no se multiplica.
-          </p>
-        </div>
-      )}
-    </div>
-  );
-}
-
-const modValueText = (m: CustomMod) => `${m.dice ? `+${m.dice}` : fmtMod(m.value)}${m.perDie ? "/dado" : ""}`;
 
 // Formulario para agregar un ataque a mano (arma encontrada en la partida)
 function AddWeapon({ onAdd }: { onAdd: (w: CustomWeapon) => void }) {
@@ -623,7 +491,7 @@ export function AttacksTab({ character: c, state, canEdit, extras, canEditExtras
 
   return (
     <>
-      <CustomMods extras={extras} canEdit={canEditExtras} update={updateExtras} />
+      <ModsEditor mods={extras.mods ?? []} canEdit={canEditExtras} onChange={(fn) => updateExtras((x) => ({ ...x, mods: fn(x.mods ?? []) }))} />
       {weapons.length === 0 && !c.impulse && <p className="muted">Este personaje no tiene armas en Pathbuilder.</p>}
       {weapons.length > 0 && (
         <div className="fx-row">

@@ -11,6 +11,7 @@ import { autoRoll, type Roller } from "../autoRoll";
 import { EMPTY_COMBAT, combatStore, moveTarget, stepTurn, type Combat, type Entry, type NpcCombatant } from "../combat";
 import { endOfTurn, startOfTurn, type Publish } from "../turns";
 import type { RollFx } from "../fx";
+import { clearCooldowns, npcInitiative } from "../npc";
 
 export type CombatActions = ReturnType<typeof useCombatActions>;
 
@@ -26,17 +27,17 @@ export function useCombatActions(combat: Combat, entries: Entry[], who: Roller, 
       combatStore.patch((c) => ({ ...c, npcs: c.npcs.map((n) => (n.id === id ? fn(n) : n)) }));
 
     // La tirada de un PNJ la ve solo el GM
-    const rollFor = async (name: string, mod: number) => {
+    const rollFor = async (name: string, mod: number, lbl?: string) => {
       const { who, publish } = ref.current;
-      const e = autoRoll(who, name, "Iniciativa", `1d20${fmtMod(mod)}`, "check");
+      const e = autoRoll(who, name, lbl ? `Iniciativa (${lbl})` : "Iniciativa", `1d20${fmtMod(mod)}`, "check");
       await publish({ ...e, secret: true });
       return e.total;
     };
 
-    const addNpcs = async (list: { name: string; mod: number; tokenId?: string; hidden?: boolean }[]) => {
+    const addNpcs = async (list: { name: string; mod: number; lbl?: string; tokenId?: string; hidden?: boolean }[]) => {
       const added: NpcCombatant[] = [];
       for (const n of list) {
-        added.push({ id: newId(), name: n.name || "Criatura", tokenId: n.tokenId, mod: n.mod, hidden: n.hidden, init: await rollFor(n.name, n.mod) });
+        added.push({ id: newId(), name: n.name || "Criatura", tokenId: n.tokenId, mod: n.mod, lbl: n.lbl, hidden: n.hidden, init: await rollFor(n.name, n.mod, n.lbl) });
       }
       if (added.length) await combatStore.patch((c) => ({ ...c, npcs: [...c.npcs, ...added] }));
       return added.length;
@@ -47,7 +48,7 @@ export function useCombatActions(combat: Combat, entries: Entry[], who: Roller, 
       if (!inOwlbear || !ids.length) return 0;
       const { combat } = ref.current;
       const items = await OBR.scene.items.getItems(ids);
-      const npcs: { name: string; mod: number; tokenId: string; hidden?: boolean }[] = [];
+      const npcs: { name: string; mod: number; lbl?: string; tokenId: string; hidden?: boolean }[] = [];
       const include: string[] = [];
       for (const item of items) {
         const d = tokenData(item);
@@ -55,7 +56,9 @@ export function useCombatActions(combat: Combat, entries: Entry[], who: Roller, 
           if (combat.excluded.includes(d.characterId)) include.push(d.characterId);
         }
         else if (!combat.npcs.some((n) => n.tokenId === item.id)) {
-          npcs.push({ name: (d?.kind === "npc" && d.nick) || item.name || d?.name || "Criatura", mod, tokenId: item.id, hidden: !item.visible });
+          // Con ficha de PNJ tira con su iniciativa (Percepción o la habilidad elegida); si no, con el Mod escrito
+          const ini = d?.kind === "npc" ? npcInitiative(npcState(d)) : undefined;
+          npcs.push({ name: (d?.kind === "npc" && d.nick) || item.name || d?.name || "Criatura", mod: ini?.mod ?? mod, lbl: ini?.label, tokenId: item.id, hidden: !item.visible });
         }
       }
       if (include.length) await combatStore.patch((c) => ({ ...c, excluded: c.excluded.filter((x) => !include.includes(x)) }));
@@ -142,6 +145,9 @@ export function useCombatActions(combat: Combat, entries: Entry[], who: Roller, 
         if (inOwlbear && (await OBR.scene.isReady())) {
           const flanked = await OBR.scene.items.getItems((i) => isFlanked(tokenData(i)?.cond));
           for (const i of flanked) await patchNpc(i.id, (n) => ({ ...n, cond: setFlank(n.cond, false) }));
+          // Los enfriamientos de los poderes de PNJ duran rondas: se acaban con el combate
+          const cooling = await OBR.scene.items.getItems((i) => (tokenData(i)?.spells ?? []).some((sp) => (sp.cdLeft ?? 0) > 0));
+          for (const i of cooling) await patchNpc(i.id, clearCooldowns);
         }
         await combatStore.write({ ...EMPTY_COMBAT, excluded: ref.current.combat.excluded });
       },
@@ -208,8 +214,15 @@ export function useCombatActions(combat: Combat, entries: Entry[], who: Roller, 
 
       async reroll(e: Entry) {
         if (!e.npc) return;
-        const value = await rollFor(e.npc.name, e.npc.mod);
-        await patchNpcEntry(e.npc.id, (n) => ({ ...n, init: value, tb: undefined }));
+        // Con ficha de PNJ vuelve a calcular su iniciativa (condiciones y bonos actuales)
+        let ini: { mod: number; label?: string } = { mod: e.npc.mod, label: e.npc.lbl };
+        if (e.npc.tokenId && inOwlbear) {
+          const [item] = await OBR.scene.items.getItems([e.npc.tokenId]);
+          const d = item && tokenData(item);
+          if (d?.kind === "npc") ini = npcInitiative(npcState(d));
+        }
+        const value = await rollFor(e.npc.name, ini.mod, ini.label);
+        await patchNpcEntry(e.npc.id, (n) => ({ ...n, init: value, mod: ini.mod, lbl: ini.label, tb: undefined }));
       },
 
       toggleHidden: (e: Entry) => (e.npc ? patchNpcEntry(e.npc.id, (n) => ({ ...n, hidden: !n.hidden })) : Promise.resolve()),

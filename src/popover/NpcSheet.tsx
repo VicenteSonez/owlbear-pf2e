@@ -21,20 +21,25 @@ import {
   type IwrPick,
 } from "../rules";
 import { ikonVsAttack } from "../classes";
-import { PLAYER_VIEW_LABEL, SAVE_LABEL, newId, npcLabel, npcPlayerView, type NpcAttack, type NpcSpell, type NpcState, type PersistentSpec, type SaveKey, type SpellKind } from "../shared";
+import { PLAYER_VIEW_LABEL, SAVE_LABEL, newId, npcLabel, npcPlayerView, type DamageSpec, type NpcAttack, type NpcSpell, type NpcState, type PersistentSpec, type SaveKey } from "../shared";
 import { live } from "../live";
-import { inOwlbear, renameToken } from "../obr";
+import { findTokenFor, inOwlbear, renameToken, tokenData } from "../obr";
 import { parseFormula } from "../dice";
-import { ATTACK_FX, MAGIC_DESIGNS, type AttackFx, type MagicDesign } from "../fx";
-import { dealDamage, readTarget, type TargetInfo } from "../damage";
+import { ATTACK_FX, type AttackFx } from "../fx";
+import { NO_IWR, dealDamage, finalParts, mergeParts, readTarget, type TargetInfo, type TargetRef } from "../damage";
+import { damageText, fixedCooldown, npcAtkMods, npcDamage, spellAtkOf, spellDcOf, spellReady, spendSpell } from "../npc";
+import OBR from "@owlbear-rodeo/sdk";
 import { useActions } from "./ctx";
 import { NumInput } from "./bits";
 import { IwrChips, IwrEditor, DamageTypeList } from "./DamageBox";
 import { ShieldCard } from "./ShieldCard";
 import { SaveRequestForm } from "./SavesPanel";
+import { ModsEditor } from "./ModsEditor";
+import { ExtraDamage, NpcSpells } from "./NpcSpells";
+import { NpcSkills } from "./NpcSkills";
+import { distancesFrom } from "./splash";
 
 const MAP_LABEL = ["1º", "2º", "3º"];
-const KIND_LABEL: Record<SpellKind, string> = { atk: "Ataque", save: "Salvación", fx: "Efecto" };
 
 interface Props {
   tokenId: string;
@@ -49,12 +54,15 @@ interface LastHit {
   label: string;
   dmg?: string;
   ty?: string;
+  dmg2?: DamageSpec[];
   melee: boolean;
   thrown?: boolean;
   pers?: PersistentSpec;
   degree: Degree;
   target: TargetInfo;
   spell?: boolean;
+  // El objetivo estaba desprevenido (para los bonos "solo si está desprevenido")
+  og?: boolean;
 }
 
 const validFormula = (f: string) => {
@@ -75,7 +83,8 @@ export function NpcSheet({ tokenId, itemName, state: n, states, onPatch }: Props
   const { roll, notify, publish, playFx, meId } = useActions();
   const name = npcLabel({ name: itemName || n.name, num: n.num, nick: n.nick });
   const [last, setLast] = useState<LastHit | null>(null);
-  const [pick, setPick] = useState<IwrPick | null>(null);
+  // Resistencias elegidas a mano, por tipo de daño (si no, las que coinciden)
+  const [picks, setPicks] = useState<Record<string, IwrPick>>({});
   const [block, setBlock] = useState(false);
   // Aplicar también el daño persistente del golpe
   const [withPers, setWithPers] = useState(true);
@@ -118,12 +127,14 @@ export function NpcSheet({ tokenId, itemName, state: n, states, onPatch }: Props
     }
     // Íconos del ejemplar: Mancha llamativa (−1 c. a c.) y Mirada afilada (+2 CA a distancia)
     const ik = ikonVsAttack(pc, a.melee);
-    const adj = stackMods([...checkAdjust(cond, { kind: "attack", melee: a.melee, finesse: !!a.dex, target: n.target }).applied, ...ik.atk]);
     const step = (a.agile ? 4 : 5) * map;
     // Burlar (explorador): +1 circunstancial a la CA contra su presa
     const outwit = pc?.cls?.prey === tokenId && pc.cls.edge === "outwit" ? 1 : 0;
     // El PJ no ve al PNJ escondido: queda desprevenido ante el ataque
     const og = hiddenFrom(n.cond, n.target) && !pc?.cond.offGuard ? 2 : 0;
+    const offGuard = !!og || !!pc?.cond.offGuard;
+    // Condiciones, íconos del ejemplar y los bonos a mano del PNJ
+    const adj = stackMods([...checkAdjust(cond, { kind: "attack", melee: a.melee, finesse: !!a.dex, target: n.target }).applied, ...ik.atk, ...npcAtkMods(n.mods, offGuard)]);
     const r = await roll(
       {
         label: `${name}: ${a.n || "Ataque"} (${MAP_LABEL[map]})`,
@@ -149,40 +160,101 @@ export function NpcSheet({ tokenId, itemName, state: n, states, onPatch }: Props
         cond: withBuff(x.cond, { id: "taunt-og", n: "Desprevenido (Provocar)", ty: "circumstance", ac: -2, icon: "off-guard", until: { key: `npc:${tokenId}`, at: "start" } }),
       }));
     }
-    setLast({ label: a.n || "Ataque", dmg: a.dmg, ty: a.ty, melee: a.melee, thrown: a.thrown, pers: a.pers, degree: r.degree, target: tgt });
-    setPick(null);
+    setLast({ label: a.n || "Ataque", dmg: a.dmg, ty: a.ty, dmg2: a.dmg2, melee: a.melee, thrown: a.thrown, pers: a.pers, degree: r.degree, target: tgt, og: offGuard });
+    setPicks({});
     setBlock(false);
     setWithPers(true);
   };
 
-  const rollDamage = async (crit: boolean) => {
+  // Daño del golpe: fórmula del ataque, otros tipos y bonos a mano (los conjuros no llevan bonos ni Débil)
+  const hitDamage = (h: LastHit, crit: boolean) =>
+    npcDamage({
+      dmg: h.dmg ?? "",
+      ty: h.ty ?? "",
+      dmg2: h.dmg2,
+      pers: h.pers,
+      mods: h.spell ? undefined : n.mods,
+      pen: h.spell ? [] : checkAdjust(n.cond, { kind: "damage", melee: h.melee, str: h.thrown }).applied,
+      crit,
+      og: h.og,
+    });
+  // Tipos que recibe el objetivo (la salpicadura se suma al de su tipo)
+  const hitTypes = (h: LastHit, crit: boolean) => {
+    const d = hitDamage(h, crit);
+    return mergeParts([{ amt: 0, ty: d.ty }, ...d.groups.map((g) => ({ amt: 0, ty: g.ty }))]).map((p) => p.ty);
+  };
+  const pickFor = (h: LastHit, ty: string, i: number, crit: boolean) => picks[ty.toLowerCase()] ?? autoIwr(h.target.iwr, ty, { crit, noTagMatch: i > 0 });
+
+  // Salpicadura a los que estén a 5 pies del objetivo (sin contar al propio PNJ)
+  const splashNearby = async (h: LastHit, amt: number, ty: string) => {
+    if (!inOwlbear || amt <= 0 || h.target.ref.kind !== "pc") return [];
+    const tok = await findTokenFor(h.target.ref.id);
+    if (!tok) return [];
+    const dist = await distancesFrom(tok.id);
+    const ids = Object.keys(dist).filter((id) => dist[id] <= 5 && id !== tokenId);
+    const items = ids.length ? await OBR.scene.items.getItems(ids) : [];
+    const out: string[] = [];
+    for (const it of items) {
+      const d = tokenData(it);
+      const ref: TargetRef | null = d?.kind === "pc" && d.characterId ? { kind: "pc", id: d.characterId } : d?.kind === "npc" ? { kind: "npc", tokenId: it.id } : null;
+      if (!ref || !d) continue;
+      const r = await dealDamage(ref, amt, { type: ty });
+      out.push(`${d.kind === "npc" ? npcLabel({ name: it.name || d.name, num: d.num, nick: d.nick }) : it.name} ${r.total}`);
+    }
+    return out;
+  };
+
+  // splashOnly: el ataque falló y solo llega la salpicadura al objetivo
+  const rollDamage = async (crit: boolean, splashOnly = false) => {
     if (!last?.dmg) return;
-    const pen = last.spell ? { total: 0, applied: [] } : checkAdjust(n.cond, { kind: "damage", melee: last.melee, str: last.thrown });
+    const d = hitDamage(last, crit && !splashOnly);
+    const sp = d.groups.find((g) => g.splash);
+    if (splashOnly && !sp) return;
+    const groups = splashOnly ? [] : d.groups;
     const r = await roll(
       {
-        label: `${name}: ${last.label} (${crit ? "crítico" : "daño"})`,
-        formula: last.dmg + (pen.total ? fmtMod(pen.total) : ""),
+        label: `${name}: ${last.label} (${splashOnly ? "salpicadura" : crit ? "crítico" : "daño"})`,
+        formula: splashOnly ? sp!.f : d.formula,
+        extra: groups.length ? groups.map((g) => ({ f: g.f, mult: g.mult })) : undefined,
         kind: "damage",
-        crit,
-        notes: modsText(pen.applied) || undefined,
+        crit: crit && !splashOnly,
+        notes: d.notes || undefined,
         secret: true,
         charName: name,
       },
       { quick: true },
     );
     if (!r) return;
-    const out = await dealDamage(last.target.ref, r.total, { type: last.ty, pick: pick ?? autoIwr(last.target.iwr, last.ty ?? "", { crit }), block });
-    // Daño persistente del golpe (el de "solo crítico" requiere crítico y no se duplica; si no, con crítico se duplica)
-    const pers = last.pers && withPers && validFormula(last.pers.f) && (!last.pers.crit || crit) ? last.pers : undefined;
-    if (pers && last.target.ref.kind === "pc") {
-      const p = { id: newId(), formula: pers.f, type: pers.ty, crit: (crit && !pers.crit) || undefined };
-      await live.patch(last.target.ref.id, (s) => ({ ...s, cond: { ...s.cond, persistent: addPersistent(s.cond.persistent, p) } }));
+    const amts = r.parts ?? [r.total];
+    const raw: { amt: number; ty: string }[] = splashOnly ? [{ amt: r.total, ty: sp!.ty }] : [{ amt: amts[0] ?? r.total, ty: d.ty }, ...groups.map((g, i) => ({ amt: amts[i + 1] ?? 0, ty: g.ty }))];
+    const parts = mergeParts(raw);
+    const res = finalParts(parts, last.target.iwr, parts.map((p, i) => pickFor(last, p.ty, i, crit)));
+    const out = await dealDamage(last.target.ref, res.total, { pick: NO_IWR, block });
+    // Con un éxito la salpicadura también llega a los que están a 5 pies
+    const splashIdx = sp && !splashOnly ? groups.indexOf(sp) : -1;
+    const splashed = splashIdx >= 0 && last.degree.includes("success") ? await splashNearby(last, amts[splashIdx + 1] ?? 0, sp!.ty) : [];
+    // Persistentes (el de "solo crítico" requiere crítico y no se duplica; si no, con crítico se duplica)
+    const pers = splashOnly || !withPers ? [] : d.pers.filter((p) => validFormula(p.f));
+    if (pers.length && last.target.ref.kind === "pc") {
+      await live.patch(last.target.ref.id, (s) => {
+        let list = s.cond.persistent;
+        for (const p of pers) list = addPersistent(list, { id: newId(), formula: p.f, type: p.ty, crit: (crit && !p.crit) || undefined });
+        return { ...s, cond: { ...s.cond, persistent: list } };
+      });
     }
     await notify({
       label: `${name} → ${last.target.name}`,
       title: `${out.total} de daño`,
-      detail: [last.ty, out.notes, pers ? `+ ${pers.f}${crit && !pers.crit ? " ×2" : ""} persistente ${pers.ty}`.trim() : ""].filter(Boolean).join(" · "),
-      tag: crit ? "Crítico" : "Daño",
+      detail: [
+        parts.map((p) => `${p.amt} ${p.ty || "sin tipo"}`).join(" + "),
+        res.notes,
+        out.notes,
+        ...pers.map((p) => `+ ${p.f}${crit && !p.crit ? " ×2" : ""} persistente ${p.ty}`.trim()),
+        splashed.length ? `Salpicadura: ${splashed.join(", ")}` : "",
+      ]
+        .filter(Boolean)
+        .join(" · "),
+      tag: splashOnly ? "Salpicadura" : crit ? "Crítico" : "Daño",
       charName: name,
       secret,
     });
@@ -190,8 +262,18 @@ export function NpcSheet({ tokenId, itemName, state: n, states, onPatch }: Props
   };
 
   const castSpell = async (sp: NpcSpell) => {
-    // Estupefacto: prueba plana CD 5 + X o el conjuro se pierde
-    const stup = n.cond.stupefied ?? 0;
+    if (spellReady(n, sp)) return;
+    // Enfriamiento: rondas fijas o un dado que se tira ahora (en secreto)
+    let cdRounds = fixedCooldown(sp.cd);
+    if (cdRounds === null) {
+      const r = await roll({ label: `${name}: ${sp.n}: enfriamiento`, formula: sp.cd!.trim(), kind: "free", secret: true, charName: name }, { quick: true });
+      cdRounds = Math.max(1, r?.total ?? 1);
+    }
+    // Se gasta el uso, el espacio o el recurso aunque Estupefacto haga perder el conjuro
+    const rounds = cdRounds;
+    onPatch((x) => spendSpell(x, sp.id, rounds));
+    // Estupefacto: prueba plana CD 5 + X o el conjuro se pierde (los poderes no la piden)
+    const stup = sp.pow ? 0 : (n.cond.stupefied ?? 0);
     if (stup > 0) {
       const flat = autoFlat({ playerId: meId, playerName: "GM", playerColor: "#e8622c" }, name, `${sp.n}: prueba de Estupefacto`, 5 + stup);
       await publish({ ...flat, secret: secret || undefined });
@@ -202,7 +284,14 @@ export function NpcSheet({ tokenId, itemName, state: n, states, onPatch }: Props
     }
     const detail =
       sp.kind === "save" ? `Salvación de ${SAVE_LABEL[sp.save ?? "reflex"]}${sp.basic ? " básica" : ""}` : sp.kind === "atk" ? "Ataque de conjuro" : "Efecto";
-    await notify({ label: "Lanza", title: sp.n, detail: [detail, sp.area ? "Área" : ""].filter(Boolean).join(" · "), tag: "Conjuro", charName: name, secret });
+    await notify({
+      label: sp.pow ? "Usa" : "Lanza",
+      title: sp.n,
+      detail: [detail, sp.area ? "Área" : "", rounds ? `Enfriamiento: ${rounds} ronda${rounds === 1 ? "" : "s"}` : ""].filter(Boolean).join(" · "),
+      tag: sp.pow ? "Poder" : "Conjuro",
+      charName: name,
+      secret,
+    });
     playFx({ kind: sp.fx ?? "arcane", from: tokenId });
     const pc = n.target?.startsWith("pc:") ? states[n.target.slice(3)] : undefined;
     // De un solo objetivo: si está escondido u oculto, prueba plana antes
@@ -215,8 +304,8 @@ export function NpcSheet({ tokenId, itemName, state: n, states, onPatch }: Props
       const og = hiddenFrom(n.cond, n.target) && !pc?.cond.offGuard ? 2 : 0;
       const r = await roll(
         {
-          label: `${name}: ${sp.n} (ataque de conjuro)`,
-          formula: `1d20${fmtMod((n.spellAtk ?? 0) + adj.total)}`,
+          label: `${name}: ${sp.n} (${sp.pow ? "ataque" : "ataque de conjuro"})`,
+          formula: `1d20${fmtMod(spellAtkOf(n, sp) + adj.total)}`,
           kind: "check",
           notes: [modsText(adj.applied), ik.notes].filter(Boolean).join(" · ") || undefined,
           vs: { dc: tgt.ac + ik.ac - og, name: tgt.name },
@@ -226,15 +315,17 @@ export function NpcSheet({ tokenId, itemName, state: n, states, onPatch }: Props
         },
         { quick: true },
       );
-      if (r?.degree) setLast({ label: sp.n, dmg: sp.dmg, ty: sp.ty, melee: false, degree: r.degree, target: tgt, spell: true });
+      if (r?.degree) {
+        setLast({ label: sp.n, dmg: sp.dmg, ty: sp.ty, dmg2: sp.dmg2, melee: false, degree: r.degree, target: tgt, spell: true });
+        setPicks({});
+        setBlock(false);
+      }
     }
     if (sp.kind === "save") setSaveFor(sp);
   };
 
   const attacks = n.attacks;
-  const spells = n.spells;
   const setAttack = (id: string, p: Partial<NpcAttack>) => onPatch((x) => ({ ...x, attacks: x.attacks.map((a) => (a.id === id ? { ...a, ...p } : a)) }));
-  const setSpell = (id: string, p: Partial<NpcSpell>) => onPatch((x) => ({ ...x, spells: x.spells.map((s) => (s.id === id ? { ...s, ...p } : s)) }));
 
   return (
     <div className="npc-sheet">
@@ -302,6 +393,8 @@ export function NpcSheet({ tokenId, itemName, state: n, states, onPatch }: Props
         })}
       </div>
 
+      <NpcSkills tokenId={tokenId} name={name} n={n} onPatch={onPatch} />
+
       <h3>Objetivo</h3>
       <div className="te-row wrap">
         <select
@@ -345,6 +438,7 @@ export function NpcSheet({ tokenId, itemName, state: n, states, onPatch }: Props
             <input className="sm" placeholder="+0" defaultValue={fmtMod(a.atk)} title="Bono de ataque" onBlur={(e) => setAttack(a.id, { atk: parseMod(e.target.value) })} />
             <input className="md" placeholder="1d8+4" defaultValue={a.dmg} title="Daño" onBlur={(e) => setAttack(a.id, { dmg: e.target.value.trim() })} />
             <input className="md" list="pf2-damage-types" placeholder="Tipo" defaultValue={a.ty} onBlur={(e) => setAttack(a.id, { ty: e.target.value.trim() })} />
+            <ExtraDamage list={a.dmg2} onChange={(dmg2) => setAttack(a.id, { dmg2 })} />
             <button className={`chip ${a.melee ? "on" : ""}`} onClick={() => setAttack(a.id, { melee: !a.melee })}>
               {a.melee ? "Cuerpo a cuerpo" : "A distancia"}
             </button>
@@ -394,14 +488,14 @@ export function NpcSheet({ tokenId, itemName, state: n, states, onPatch }: Props
             <div className="weapon-head">
               <b>{a.n || "Ataque"}</b>
               <span className="muted small">
-                {a.dmg} {a.ty} · {a.melee ? "c. a c." : a.thrown ? "arrojadiza" : "distancia"} · {a.dex ? "Des" : "Fue"}
+                {damageText(a.dmg, a.ty, a.dmg2)} · {a.melee ? "c. a c." : a.thrown ? "arrojadiza" : "distancia"} · {a.dex ? "Des" : "Fue"}
                 {a.agile ? " · ágil" : ""}
                 {a.pers ? ` · ${a.pers.f} persist. ${a.pers.ty}${a.pers.crit ? " (crítico)" : ""}` : ""}
               </span>
             </div>
             <div className="weapon-btns">
               {[0, 1, 2].map((m) => {
-                const adj = checkAdjust(cond, { kind: "attack", melee: a.melee, finesse: !!a.dex, target: n.target });
+                const adj = stackMods([...checkAdjust(cond, { kind: "attack", melee: a.melee, finesse: !!a.dex, target: n.target }).applied, ...npcAtkMods(n.mods)]);
                 return (
                   <button key={m} className={`btn ${adj.total < 0 ? "down" : ""}`} disabled={!n.target} title={n.target ? modsText(adj.applied) || undefined : "Elige un objetivo"} onClick={() => rollAttack(a, m)}>
                     {fmtMod(a.atk + adj.total - (a.agile ? 4 : 5) * m)}
@@ -417,6 +511,10 @@ export function NpcSheet({ tokenId, itemName, state: n, states, onPatch }: Props
           + Ataque
         </button>
       )}
+      <ModsEditor mods={n.mods ?? []} canEdit onChange={(fn) => onPatch((x) => {
+          const mods = fn(x.mods ?? []);
+          return { ...x, mods: mods.length ? mods : undefined };
+        })} />
 
       {last && (
         <div className={`npc-last ${last.degree.includes("success") ? "ok" : "fail"}`}>
@@ -424,37 +522,60 @@ export function NpcSheet({ tokenId, itemName, state: n, states, onPatch }: Props
             <b>{last.label}</b> → {last.target.name}: <span className="deg">{DEGREE_LABEL[last.degree]}</span>
           </div>
           {last.dmg ? (
-            <>
-              <IwrChips
-                iwr={last.target.iwr}
-                type={last.ty ?? ""}
-                pick={pick ?? autoIwr(last.target.iwr, last.ty ?? "", { crit: last.degree === "crit-success" })}
-                onPick={setPick}
-                shield={last.target.shield}
-                block={block}
-                onBlock={setBlock}
-              />
-              {last.pers && (
-                <label className="te-check" title="Se agrega al objetivo (del mismo tipo queda el mayor)">
-                  <input type="checkbox" checked={withPers} onChange={(e) => setWithPers(e.target.checked)} />
-                  Persistente {last.pers.f} {last.pers.ty}
-                  {last.pers.crit ? " (solo con crítico)" : ""} · con crítico ×2
-                </label>
-              )}
-              <div className="te-row">
-                <button className="btn danger" onClick={() => rollDamage(last.degree === "crit-success")}>
-                  {last.degree === "crit-success" ? "Daño crítico (×2)" : "Tirar daño"} {last.dmg}
-                </button>
-                {last.degree !== "crit-success" && (
-                  <button className="btn crit" onClick={() => rollDamage(true)}>
-                    Crítico
-                  </button>
-                )}
-                <button className="btn ghost" onClick={() => setLast(null)}>
-                  Cerrar
-                </button>
-              </div>
-            </>
+            (() => {
+              const crit = last.degree === "crit-success";
+              const d = hitDamage(last, crit);
+              const types = hitTypes(last, crit);
+              // Persistentes posibles (los de solo crítico también, para saber que existen)
+              const allPers = hitDamage(last, true).pers;
+              const splash = d.groups.some((g) => g.splash);
+              return (
+                <>
+                  <div className="muted small">
+                    {d.shown}
+                    {d.notes ? ` · ${d.notes}` : ""}
+                  </div>
+                  {types.map((ty, i) => (
+                    <div key={ty || i} className="dr-part">
+                      {types.length > 1 && <span className="muted small">{ty || "sin tipo"}</span>}
+                      <IwrChips
+                        iwr={last.target.iwr}
+                        type={ty}
+                        pick={pickFor(last, ty, i, crit)}
+                        onPick={(pk) => setPicks((m) => ({ ...m, [ty.toLowerCase()]: pk }))}
+                        shield={i === 0 ? last.target.shield : undefined}
+                        block={block}
+                        onBlock={i === 0 ? setBlock : undefined}
+                      />
+                    </div>
+                  ))}
+                  {allPers.length > 0 && (
+                    <label className="te-check" title="Se agrega al objetivo (del mismo tipo queda el mayor)">
+                      <input type="checkbox" checked={withPers} onChange={(e) => setWithPers(e.target.checked)} />
+                      Persistente {allPers.map((p) => `${p.f} ${p.ty}${p.crit ? " (solo con crítico)" : ""}`.trim()).join(", ")} · con crítico ×2
+                    </label>
+                  )}
+                  <div className="te-row">
+                    <button className="btn danger" onClick={() => rollDamage(crit)}>
+                      {crit ? "Daño crítico (×2)" : "Tirar daño"} {damageText(last.dmg, undefined, last.dmg2)}
+                    </button>
+                    {!crit && (
+                      <button className="btn crit" onClick={() => rollDamage(true)}>
+                        Crítico
+                      </button>
+                    )}
+                    {splash && last.degree === "failure" && (
+                      <button className="btn ghost" title="Falló: solo la salpicadura llega al objetivo" onClick={() => rollDamage(false, true)}>
+                        Solo salpicadura
+                      </button>
+                    )}
+                    <button className="btn ghost" onClick={() => setLast(null)}>
+                      Cerrar
+                    </button>
+                  </div>
+                </>
+              );
+            })()
           ) : (
             <button className="btn ghost" onClick={() => setLast(null)}>
               Cerrar
@@ -464,85 +585,32 @@ export function NpcSheet({ tokenId, itemName, state: n, states, onPatch }: Props
       )}
 
       <h3>
-        Conjuros
+        Conjuros y poderes
         <button className={`btn ghost small-btn ${editSp ? "on" : ""}`} onClick={() => setEditSp((e) => !e)}>
           {editSp ? "Listo" : "✎ Editar"}
         </button>
       </h3>
-      <div className="te-row">
-        <NumInput label="Ataque de conjuro" value={n.spellAtk ?? 0} onCommit={(v) => onPatch((x) => ({ ...x, spellAtk: v }))} />
-        <NumInput label="CD de conjuro" value={n.spellDc ?? 0} onCommit={(v) => onPatch((x) => ({ ...x, spellDc: v }))} />
-      </div>
-      {spells.length === 0 && !editSp && <p className="muted small">Sin conjuros.</p>}
-      {spells.map((sp) =>
-        editSp ? (
-          <div key={sp.id} className="npc-edit spell">
-            <input placeholder="Conjuro" defaultValue={sp.n} onBlur={(e) => setSpell(sp.id, { n: e.target.value.trim() })} />
-            <select value={sp.kind} onChange={(e) => setSpell(sp.id, { kind: e.target.value as SpellKind })}>
-              {(Object.keys(KIND_LABEL) as SpellKind[]).map((k) => (
-                <option key={k} value={k}>
-                  {KIND_LABEL[k]}
-                </option>
-              ))}
-            </select>
-            {sp.kind === "save" && (
-              <>
-                <select value={sp.save ?? "reflex"} onChange={(e) => setSpell(sp.id, { save: e.target.value as SaveKey })}>
-                  {(["fortitude", "reflex", "will"] as SaveKey[]).map((k) => (
-                    <option key={k} value={k}>
-                      {SAVE_LABEL[k]}
-                    </option>
-                  ))}
-                </select>
-                <button className={`chip ${sp.basic ? "on" : ""}`} onClick={() => setSpell(sp.id, { basic: !sp.basic })}>
-                  Básica
-                </button>
-              </>
-            )}
-            <input className="md" placeholder="Daño" defaultValue={sp.dmg} onBlur={(e) => setSpell(sp.id, { dmg: e.target.value.trim() || undefined })} />
-            <input className="md" list="pf2-damage-types" placeholder="Tipo" defaultValue={sp.ty} onBlur={(e) => setSpell(sp.id, { ty: e.target.value.trim() || undefined })} />
-            <button className={`chip ${sp.area ? "on" : ""}`} title="De área: no pide prueba plana contra objetivos escondidos u ocultos" onClick={() => setSpell(sp.id, { area: !sp.area || undefined })}>
-              Área
-            </button>
-            <select className="fx-select" value={sp.fx ?? "arcane"} onChange={(e) => setSpell(sp.id, { fx: e.target.value as MagicDesign })}>
-              {MAGIC_DESIGNS.map((d) => (
-                <option key={d.id} value={d.id}>
-                  ✦ {d.label}
-                </option>
-              ))}
-            </select>
-            <button className="row-x" title="Quitar" onClick={() => onPatch((x) => ({ ...x, spells: x.spells.filter((y) => y.id !== sp.id) }))}>
-              ✕
-            </button>
-            <textarea className="feat-notes" placeholder="Descripción" defaultValue={sp.desc} onBlur={(e) => setSpell(sp.id, { desc: e.target.value || undefined })} />
-          </div>
-        ) : (
-          <div key={sp.id} className="spell-row npc-spell" title={sp.desc}>
-            <span className="ename">{sp.n || "Conjuro"}</span>
-            <span className="badge">{KIND_LABEL[sp.kind]}{sp.kind === "save" ? ` · ${SAVE_LABEL[sp.save ?? "reflex"]}` : ""}</span>
-            {sp.dmg && <span className="muted small">{sp.dmg} {sp.ty}</span>}
-            <button className="btn small-btn" disabled={sp.kind === "atk" && !n.target} onClick={() => castSpell(sp)}>
-              Lanzar
-            </button>
-          </div>
-        ),
-      )}
-      {editSp && (
-        <button className="btn ghost" onClick={() => onPatch((x) => ({ ...x, spells: [...x.spells, { id: newId(), n: "", kind: "save", save: "reflex" }] }))}>
-          + Conjuro
-        </button>
-      )}
+      <NpcSpells
+        n={n}
+        edit={editSp}
+        onPatch={onPatch}
+        onCast={castSpell}
+        blocked={(sp) => (sp.kind === "atk" && !n.target ? "Elige un objetivo" : null)}
+      />
       {saveFor && (
         <SaveRequestForm
+          // Otro conjuro o poder: el formulario empieza de nuevo con su CD y daño
+          key={saveFor.id}
           states={states}
           defaults={{
             name: saveFor.n,
             save: saveFor.save,
             // Provocado: −1 a la CD si el objetivo no es el guardián
-            dc: (n.spellDc || levelDc(Math.max(0, n.level))) - (taunter && n.target !== `pc:${taunter.id}` ? 1 : 0),
+            dc: spellDcOf(n, saveFor, levelDc(Math.max(0, n.level))) - (taunter && n.target !== `pc:${taunter.id}` ? 1 : 0),
             basic: saveFor.basic,
             dmg: saveFor.dmg,
             ty: saveFor.ty,
+            dmg2: saveFor.dmg2,
           }}
           targets={n.target ? [n.target] : []}
           from={who}

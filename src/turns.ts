@@ -8,6 +8,7 @@ import { readTarget } from "./damage";
 import { META_TOKEN, newId, npcState, type NpcState, type RollEntry, type TokenData } from "./shared";
 import { autoRecovery, resolvePersistent, type Roller } from "./autoRoll";
 import type { Entry } from "./combat";
+import { tickCooldowns } from "./npc";
 
 export type Publish = (e: RollEntry) => Promise<void>;
 
@@ -160,7 +161,11 @@ export async function startOfTurn(e: Entry, who: Roller, publish: Publish) {
       await patchNpc(t.tokenId, (n) => ({ ...n, hp: Math.min(n.maxHp, n.hp + fh) }));
     }
   }
-  if (t.kind !== "pc") return;
+  if (t.kind !== "pc") {
+    // Enfriamientos de sus poderes (Aliento de dragón…): baja una ronda al empezar su turno
+    if (tickCooldowns(t.state)) await patchNpc(t.tokenId, (n) => tickCooldowns(n) ?? n);
+    return;
+  }
   const s = live.get(t.state.id);
   if (!s) return;
   if (s.shield?.raised) await live.patch(s.id, (x) => (x.shield ? { ...x, shield: { ...x.shield, raised: false } } : x));

@@ -54,6 +54,8 @@ export interface SaveEffect {
   // Daño de la salvación básica (se tira una vez y se ajusta por grado)
   dmg?: string;
   ty?: string;
+  // Daño de otros tipos (cada uno con sus resistencias)
+  dmg2?: { f: string; ty: string }[];
   from: string;
   fromName: string;
   targets: SaveTarget[];

@@ -60,6 +60,8 @@ export interface CustomMod {
   perDie?: boolean;
   // Daño de salpicadura: al objetivo y, con éxito, a los que estén a 5 pies
   splash?: boolean;
+  // Solo si el objetivo está desprevenido (arma apuñaladora, etc.)
+  og?: boolean;
 }
 
 // Ataque que el jugador agrega a mano (un arma encontrada en la partida)

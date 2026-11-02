@@ -91,6 +91,10 @@ export function npcToToken(n: NpcState): TokenData {
   // Sin listas vacías ni campos sin valor: la metadata de la escena tiene un límite
   if (!n.attacks.length) delete out.attacks;
   if (!n.spells.length) delete out.spells;
+  if (!n.res?.length) delete out.res;
+  if (!n.skills?.length) delete out.skills;
+  if (!n.mods?.length) delete out.mods;
+  if (n.slots && !Object.keys(n.slots).length) delete out.slots;
   if (!n.level) delete out.level;
   for (const k of Object.keys(out) as (keyof TokenData)[]) if (out[k] === undefined) delete out[k];
   return out;

@@ -155,7 +155,7 @@ export function CombatView({ combat, entries, isGm, own, ownState, npcStates, al
                       </span>
                     )}
                     {e.pc?.init && <span className="ie-sub">{e.pc.init.label}</span>}
-                    {e.npc && isGm && <span className="ie-sub">mod {e.npc.mod >= 0 ? `+${e.npc.mod}` : e.npc.mod}</span>}
+                    {e.npc && isGm && <span className="ie-sub">{e.npc.lbl ?? "mod"} {e.npc.mod >= 0 ? `+${e.npc.mod}` : e.npc.mod}</span>}
                     {e.pc && e.pc.dying > 0 && (
                       <CondIcon icon={e.pc.dying >= deathAt(e.pc) ? "dead" : "dying"} label="Moribundo" value={e.pc.dying} size={15} />
                     )}
@@ -226,7 +226,7 @@ export function CombatView({ combat, entries, isGm, own, ownState, npcStates, al
               + PNJ de la escena
             </button>
           </div>
-          <p className="muted small">Se tira d20 + Mod para cada uno; la tirada solo la ves tú.</p>
+          <p className="muted small">Se tira d20 + Mod para cada uno (los PNJ con ficha usan su propia iniciativa); la tirada solo la ves tú.</p>
           {msg && <p className="ca-msg">{msg}</p>}
           {excluded.length > 0 && (
             <div className="ca-excluded">

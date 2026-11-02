@@ -1,6 +1,6 @@
 import type { Character } from "./pathbuilder";
 import type { Conditions, Degree, Iwr, ShieldState } from "./rules";
-import type { Extras } from "./extras";
+import type { CustomMod, Extras } from "./extras";
 import type { AttackFx, MagicDesign, RollFx } from "./fx";
 
 export const ID = "cl.nacho.pf2e-sheets";
@@ -30,7 +30,15 @@ export interface NpcAttack {
   thrown?: boolean;
   // Daño persistente del golpe (crit: solo con crítico)
   pers?: PersistentSpec;
+  // Daño de otros tipos que se suma al golpe (2d8 espiritual además de 2d6 de frío)
+  dmg2?: DamageSpec[];
   fx?: AttackFx | "none";
+}
+
+// Daño adicional de otro tipo: fórmula y tipo
+export interface DamageSpec {
+  f: string;
+  ty: string;
 }
 
 // Daño persistente que deja un golpe: fórmula, tipo y si solo aparece con un crítico
@@ -41,6 +49,9 @@ export interface PersistentSpec {
 }
 
 export type SpellKind = "atk" | "save" | "fx";
+
+// Cómo se lanza un conjuro de PNJ: preparado (usos por día), espontáneo (espacios por rango) o a voluntad
+export type NpcCast = "prep" | "spont" | "will";
 
 export interface NpcSpell {
   id: string;
@@ -56,6 +67,43 @@ export interface NpcSpell {
   fx?: MagicDesign;
   // De área: no pide la prueba plana contra objetivos escondidos u ocultos
   area?: boolean;
+  dmg2?: DamageSpec[];
+  // Poder (no conjuro): sin Estupefacto ni espacios. own: ataque y CD propios en vez de los de magia
+  pow?: boolean;
+  own?: boolean;
+  atk?: number;
+  dc?: number;
+  // Conjuro: cómo se lanza (por defecto a voluntad)
+  cast?: NpcCast;
+  // Usos por día (preparados o poderes con usos) y los ya gastados
+  uses?: number;
+  used?: number;
+  // Enfriamiento: rondas fijas ("2") o un dado ("1d4"); cdLeft = rondas que faltan
+  cd?: string;
+  cdLeft?: number;
+  // Gasta un recurso del PNJ (id) al usarse
+  cost?: { r: string; n: number };
+}
+
+// Recurso con usos del PNJ (puntos de foco, cargas…)
+export interface NpcResource {
+  id: string;
+  n: string;
+  max: number;
+  cur: number;
+}
+
+// Habilidad del PNJ: clave de SKILLS o un Saber escrito a mano
+export interface NpcSkill {
+  k: string;
+  n?: string;
+  v: number;
+}
+
+// Iniciativa del PNJ: con qué tira ("perception" o la clave de una habilidad) y un bono extra
+export interface NpcInit {
+  sk: string;
+  b?: number;
 }
 
 export interface NpcSaves {
@@ -94,6 +142,13 @@ export interface TokenData {
   spells?: NpcSpell[];
   spellAtk?: number;
   spellDc?: number;
+  // Espacios de conjuro espontáneos por rango ("1".."10")
+  slots?: Record<string, { max: number; used: number }>;
+  res?: NpcResource[];
+  skills?: NpcSkill[];
+  init?: NpcInit;
+  // Bonos y penalizadores a mano para sus ataques y daño
+  mods?: CustomMod[];
   shield?: ShieldState;
   iwr?: Iwr;
   // Muerto viviente: inmune al vacío (si no, inmune a la vitalidad)
@@ -125,6 +180,11 @@ export interface NpcState {
   spells: NpcSpell[];
   spellAtk?: number;
   spellDc?: number;
+  slots?: Record<string, { max: number; used: number }>;
+  res?: NpcResource[];
+  skills?: NpcSkill[];
+  init?: NpcInit;
+  mods?: CustomMod[];
   shield?: ShieldState;
   iwr?: Iwr;
   undead?: boolean;
@@ -153,6 +213,11 @@ export function npcState(d: TokenData): NpcState {
     spells: d.spells ?? [],
     spellAtk: d.spellAtk,
     spellDc: d.spellDc,
+    slots: d.slots,
+    res: d.res,
+    skills: d.skills,
+    init: d.init,
+    mods: d.mods,
     shield: d.shield,
     iwr: d.iwr,
     undead: d.undead || undefined,
