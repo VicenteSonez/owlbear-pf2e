@@ -5,7 +5,7 @@ import type { PcState } from "./live";
 import type { CustomMod, CustomWeapon, Extras } from "./extras";
 import type { PersistentSpec } from "./shared";
 import { parseFormula } from "./dice";
-import { GHOST_TOUCH, conditionMods, isPrecision, modsText, normType, stackMods, type Conditions, type Mod } from "./rules";
+import { GHOST_TOUCH, conditionMods, isOffGuard, isPrecision, modsText, normType, stackMods, type Conditions, type Mod } from "./rules";
 import {
   antithesisBonus,
   guessSlinger,
@@ -46,7 +46,7 @@ export interface StrikeOpts {
   crit?: boolean;
   // Arrojar un arma cuerpo a cuerpo (daga, lanza…): ataque a distancia con Destreza
   thrown?: boolean;
-  // Objetivo desprevenido marcado a mano (bonos de "solo si está desprevenido")
+  // Objetivo desprevenido marcado a mano (Apuñalador y bonos de "solo si está desprevenido")
   offGuard?: boolean;
 }
 
@@ -73,6 +73,13 @@ export function weaponDice(w: Weapon): number {
 // Dados extra de Letal según la runa de golpe: 1 (base y golpe), 2 (mayor), 3 (superior)
 export const deadlyDice = (w: Weapon) => (weaponDice(w) >= 4 ? 3 : weaponDice(w) >= 3 ? 2 : 1);
 
+// Rasgo que depende del agarre: Dos manos (cuerpo a cuerpo) o Puntería fatal (a distancia)
+export const gripDie = (w: Weapon) => (w.ranged ? w.fatalAim : w.twoHand);
+// A dos manos, Dos manos cambia los dados del arma (no el de Letal); arrojada no cuenta
+export const twoHandDie = (w: Weapon, thrown = false) => (w.grip2 && !w.ranged && !thrown ? w.twoHand : undefined);
+// A dos manos, Puntería fatal le da Fatal con su dado
+export const fatalDie = (w: Weapon) => (w.grip2 && w.ranged && w.fatalAim ? Math.max(w.fatalAim, w.fatal ?? 0) : w.fatal);
+
 // Valor de un bono del jugador: plano o multiplicado por los dados del arma
 function modAmount(m: CustomMod, w: Weapon): number {
   return m.perDie ? m.value * weaponDice(w) : m.value;
@@ -87,7 +94,7 @@ function modDice(m: CustomMod, w: Weapon): string {
 export function offGuardVs(o: StrikeOpts): boolean {
   if (o.offGuard || o.sneak) return true;
   const t = o.target;
-  return !!t && (!!t.cond.offGuard || !!t.og || (t.cond.buffs ?? []).some((b) => (b.ac ?? 0) < 0 && /desprevenido/i.test(b.n)));
+  return !!t && (isOffGuard(t.cond) || !!t.og || (t.cond.buffs ?? []).some((b) => (b.ac ?? 0) < 0 && /desprevenido/i.test(b.n)));
 }
 
 // Bonos del jugador activos ahora (los de "solo desprevenido" piden que el objetivo lo esté)
@@ -258,6 +265,8 @@ export function strikeDamage(w: Weapon, ctx: StrikeContext, o: StrikeOpts): Stri
   if (sling && w.ranged) dice.push({ f: sling, label: "Precisión del pistolero", mult: true, prec: true });
   const sneakWeapon = w.ranged || thrown || w.agile || w.finesse || (f.ruffian && !!o.sneak);
   if (f.sneak > 0 && sneakWeapon && og) dice.push({ f: `${f.sneak}d6`, label: "Ataque furtivo", mult: true, prec: true });
+  // Apuñalador: daño de precisión contra un desprevenido
+  if (w.backstabber && offGuardVs(o)) mods.push({ label: "Apuñalador", type: "untyped", value: (w.pot ?? 0) >= 3 ? 2 : 1, prec: true });
   if (f.precise && (w.agile || w.finesse)) {
     const ps = preciseStrike(level);
     if (o.finisher && cls?.panache) dice.push({ f: `${ps.dice}d6`, label: "Golpe de gracia", mult: true, prec: true });
@@ -290,11 +299,16 @@ export function strikeDamage(w: Weapon, ctx: StrikeContext, o: StrikeOpts): Stri
     else dice.push({ f: String(amount), label: ik.n, ty: "espíritu", mult: true });
   }
 
-  // Rasgos de crítico: Fatal cambia el dado del arma y suma uno; Letal suma dados. No se duplican.
+  // Dos manos cambia el dado del arma. Rasgos de crítico: Fatal cambia el dado del arma y suma
+  // uno; Letal suma dados (de su propio tamaño). Los dados de crítico no se duplican.
   let baseDice = w.dmgFormula?.trim() || `${w.diceCount}d${w.dieSides}`;
-  if (crit && w.fatal) {
-    baseDice = baseDice.replace(/^(\d*)d\d+/i, (_, n: string) => `${n || "1"}d${w.fatal}`);
-    dice.push({ f: `1d${w.fatal}`, label: `Fatal d${w.fatal}`, mult: false });
+  const setDie = (sides: number) => (baseDice = baseDice.replace(/^(\d*)d\d+/i, (_, n: string) => `${n || "1"}d${sides}`));
+  const th = twoHandDie(w, thrown);
+  if (th) setDie(th);
+  const fatal = fatalDie(w);
+  if (crit && fatal) {
+    setDie(fatal);
+    dice.push({ f: `1d${fatal}`, label: `Fatal d${fatal}`, mult: false });
   }
   if (crit && w.deadly) dice.push({ f: `${deadlyDice(w)}d${w.deadly}`, label: `Letal d${w.deadly}`, mult: false });
 

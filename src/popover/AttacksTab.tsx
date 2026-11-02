@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { fmtMod, type Character, type RuneDamage, type Weapon, type WeaponRune } from "../pathbuilder";
 import type { PcState } from "../live";
-import { FLAT_LABEL, MATERIALS, checkAdjust, hiddenFrom, modsText, targetFlatDc, type Degree } from "../rules";
+import { FLAT_LABEL, MATERIALS, RESTRAINED_MSG, cantAttack, checkAdjust, isOffGuard, modsText, targetFlatDc, unseenBy, type Degree } from "../rules";
 import { applyWeaponFlags, extraKey, store, type WeaponFlags } from "../storage";
 import { newId } from "../shared";
 import type { CustomWeapon, Extras } from "../extras";
 import { parseFormula } from "../dice";
 import { ATTACK_FX, IMPACT_AT, SPLASH_FX, defaultWeaponFx, fxTiming, type AttackFx, type SplashFx } from "../fx";
 import { featuresOf, guessSlinger, type SlingerKind } from "../classes";
-import { customWeapon, deadlyDice, keepsThrown, strikeAttack, strikeDamage, weaponDice, type StrikeContext, type StrikeOpts } from "../strike";
+import { customWeapon, deadlyDice, fatalDie, gripDie, keepsThrown, twoHandDie, strikeAttack, strikeDamage, weaponDice, type StrikeContext, type StrikeOpts } from "../strike";
 import { AMMO, ammoRow, ammoRule, guessAmmo, selfRow, type AmmoRow } from "../ammo";
 import { damageReqs } from "../requests";
 import { dealDamage } from "../damage";
@@ -219,9 +219,9 @@ export function AttacksTab({ character: c, state, canEdit, extras, canEditExtras
   const target = npcs.find((n) => n.tok === targetTok);
   const me = `pc:${c.id}`;
   // Escondido del objetivo: lo encuentra desprevenido. Objetivo escondido u oculto: prueba plana.
-  const og = !!target && hiddenFrom(state?.cond, `npc:${target.tok}`);
-  const flatDc = target ? targetFlatDc(target.state.cond, me) : 0;
-  const targetAc = target ? target.ac - (og && !target.state.cond.offGuard ? 2 : 0) : 0;
+  const og = !!target && unseenBy(state?.cond, target.state.cond, `npc:${target.tok}`);
+  const flatDc = target ? targetFlatDc(target.state.cond, me, state?.cond) : 0;
+  const targetAc = target ? target.ac - (og && !isOffGuard(target.state.cond) ? 2 : 0) : 0;
   const strikeTarget = target
     ? { key: `npc:${target.tok}`, tok: target.tok, cond: target.state.cond, hp: target.state.hp, maxHp: target.state.maxHp, og }
     : undefined;
@@ -295,6 +295,7 @@ export function AttacksTab({ character: c, state, canEdit, extras, canEditExtras
   };
   // Lo que impide disparar (sin munición o sin recargar); solo lo controla el dueño de la hoja
   const blocked = (w: Weapon): string => {
+    if (cantAttack(state?.cond)) return RESTRAINED_MSG;
     if (!canEditExtras) return "";
     const a = ammoOf(w);
     if (a.rule.reload > 0 && (a.loaded ?? 0) <= 0) return "Recarga primero.";
@@ -475,8 +476,8 @@ export function AttacksTab({ character: c, state, canEdit, extras, canEditExtras
     {
       key: "offGuard",
       label: "Desprevenido",
-      title: "El objetivo está desprevenido aunque no figure así (bonos de “solo si está desprevenido”)",
-      show: f.sneak === 0 && (extras.mods ?? []).some((m) => m.on && m.og),
+      title: "El objetivo está desprevenido aunque no figure así (Apuñalador, bonos de “solo si está desprevenido”)",
+      show: f.sneak === 0 && (weapons.some((w) => w.backstabber) || (extras.mods ?? []).some((m) => m.on && m.og)),
     },
   ];
 
@@ -489,6 +490,9 @@ export function AttacksTab({ character: c, state, canEdit, extras, canEditExtras
       w.throwRange ? `arrojadiza ${w.throwRange} ft` : "",
       w.deadly ? `letal d${w.deadly}` : "",
       w.fatal ? `fatal d${w.fatal}` : "",
+      w.twoHand && !w.ranged ? `dos manos d${w.twoHand}` : "",
+      w.fatalAim && w.ranged ? `puntería fatal d${w.fatalAim}` : "",
+      w.backstabber ? "apuñalador" : "",
       w.splash?.f ? `salpicadura ${w.splash.f}` : "",
       w.mat ? MATERIALS.find((m) => m.id === w.mat)?.label.toLowerCase() : "",
       ...(w.runes ?? []).map((r) => r.n.toLowerCase()),
@@ -638,6 +642,35 @@ export function AttacksTab({ character: c, state, canEdit, extras, canEditExtras
                       ft
                     </label>
                   )}
+                  {!w.bomb && (
+                    <label
+                      className="range"
+                      title={
+                        w.ranged
+                          ? "Puntería fatal: sostenida a dos manos gana el rasgo Fatal con este dado"
+                          : "Dos manos: sostenida a dos manos, los dados del arma pasan a este dado (Letal no cambia)"
+                      }
+                    >
+                      {w.ranged ? "Puntería fatal" : "Dos manos"}
+                      <select
+                        value={gripDie(w) ?? 0}
+                        onChange={(e) => {
+                          const v = parseInt(e.target.value, 10);
+                          setFlag(w, w.ranged ? { fatalAim: v } : { twoHand: v });
+                        }}
+                      >
+                        <option value={0}>—</option>
+                        {DIE_SIDES.map((s) => (
+                          <option key={s} value={s}>
+                            d{s}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                  <button className={`chip ${w.backstabber ? "on" : ""}`} onClick={() => setFlag(w, { backstabber: !w.backstabber })} title={`Apuñalador: +${(w.pot ?? 0) >= 3 ? 2 : 1} de daño de precisión contra un objetivo desprevenido (+2 si es un arma +3)`}>
+                    Apuñalador
+                  </button>
                   {f.slinger && w.ranged && (
                     <select className="fx-select" value={sling} title="Precisión del pistolero" onChange={(e) => setFlag(w, { sling: e.target.value as SlingerKind })}>
                       <option value="none">Sin precisión</option>
@@ -846,14 +879,32 @@ export function AttacksTab({ character: c, state, canEdit, extras, canEditExtras
                 <DamageTypeList />
               </div>
             )}
-            {w.throwRange ? (
+            {w.throwRange || gripDie(w) ? (
               <div className="extras">
-                <button className={`chip ${!thrown ? "on" : ""}`} onClick={() => setThrowing((m) => ({ ...m, [key]: false }))} title="Cuerpo a cuerpo: Fuerza (o Destreza si es sutil)">
-                  Cuerpo a cuerpo
-                </button>
-                <button className={`chip ${thrown ? "on" : ""}`} onClick={() => setThrowing((m) => ({ ...m, [key]: true }))} title={`Arrojarla (${w.throwRange} ft): ataque a distancia con Destreza; el daño suma Fuerza`}>
-                  Arrojar ({w.throwRange} ft)
-                </button>
+                {gripDie(w) ? (
+                  <button
+                    className={`chip ${w.grip2 ? "on" : ""}`}
+                    disabled={thrown}
+                    onClick={() => setFlag(w, { grip2: !w.grip2 })}
+                    title={
+                      w.ranged
+                        ? `Agarre a dos manos: gana Fatal d${w.fatalAim}`
+                        : `Agarre a dos manos: los dados del arma pasan de d${w.dieSides} a d${w.twoHand} (no al arrojarla)`
+                    }
+                  >
+                    ✋✋ Dos manos{w.grip2 ? (w.ranged ? ` · fatal d${fatalDie(w)}` : ` · d${twoHandDie(w)}`) : ""}
+                  </button>
+                ) : null}
+                {w.throwRange ? (
+                  <>
+                    <button className={`chip ${!thrown ? "on" : ""}`} onClick={() => setThrowing((m) => ({ ...m, [key]: false }))} title="Cuerpo a cuerpo: Fuerza (o Destreza si es sutil)">
+                      Cuerpo a cuerpo
+                    </button>
+                    <button className={`chip ${thrown ? "on" : ""}`} onClick={() => setThrowing((m) => ({ ...m, [key]: true }))} title={`Arrojarla (${w.throwRange} ft): ataque a distancia con Destreza; el daño suma Fuerza`}>
+                      Arrojar ({w.throwRange} ft)
+                    </button>
+                  </>
+                ) : null}
               </div>
             ) : null}
             {showAmmo && (
@@ -944,7 +995,8 @@ export function AttacksTab({ character: c, state, canEdit, extras, canEditExtras
                 <>
                   <button
                     className="btn"
-                    title={modsText(atk.applied) || undefined}
+                    title={cantAttack(state?.cond) ? RESTRAINED_MSG : modsText(atk.applied) || undefined}
+                    disabled={cantAttack(state?.cond)}
                     onClick={() =>
                       roll({
                         label: "Ataque de impulso",

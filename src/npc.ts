@@ -179,11 +179,11 @@ export const npcSkillName = (s: { k: string; n?: string }) => (s.k === "lore" ? 
 // Clave de una habilidad en la lista (para elegirla en la iniciativa)
 export const npcSkillKey = (s: { k: string; n?: string }) => (s.k === "lore" ? `lore:${s.n ?? ""}` : s.k);
 
-// Ajustes de las condiciones a una habilidad o a la Percepción
-export function npcCheckAdjust(n: NpcState, key: string) {
-  if (key === "perception") return checkAdjust(n.cond, { kind: "perception" });
+// Ajustes de las condiciones a una habilidad o a la Percepción (init: es la iniciativa)
+export function npcCheckAdjust(n: NpcState, key: string, init = false) {
+  if (key === "perception") return checkAdjust(n.cond, { kind: "perception", init });
   const k = key.startsWith("lore:") ? "lore" : key;
-  return checkAdjust(n.cond, { kind: "skill", key: k, ability: SKILL_ABILITY[k] ?? "int" });
+  return checkAdjust(n.cond, { kind: "skill", key: k, ability: SKILL_ABILITY[k] ?? "int", init });
 }
 
 // Modificador de iniciativa: Percepción o la habilidad elegida, el bono extra y las condiciones
@@ -193,7 +193,7 @@ export function npcInitiative(n: NpcState) {
   const key = skill ? sk : "perception";
   const base = skill ? skill.v : (n.per ?? 0);
   const extra = n.init?.b ?? 0;
-  const adj = npcCheckAdjust(n, key);
+  const adj = npcCheckAdjust(n, key, true);
   const label = skill ? npcSkillName(skill) : "Percepción";
   return {
     mod: base + extra + adj.total,

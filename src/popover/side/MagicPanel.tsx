@@ -2,7 +2,7 @@ import { useState } from "react";
 import OBR from "@owlbear-rodeo/sdk";
 import { fmtMod, type SpellCaster } from "../../pathbuilder";
 import { live, petStateId, useLiveStates, type Resources } from "../../live";
-import { FLAT_LABEL, checkAdjust, hiddenFrom, modsText, stackMods, targetFlatDc, withBuff, type Mod } from "../../rules";
+import { FLAT_LABEL, RESTRAINED_MSG, cantAttack, checkAdjust, isOffGuard, modsText, stackMods, targetFlatDc, unseenBy, withBuff, type Conditions, type Mod } from "../../rules";
 import { SAVE_LABEL } from "../../shared";
 import type { ExtraSpell, SpellMeta } from "../../extras";
 import { newId } from "../../shared";
@@ -10,7 +10,7 @@ import { inventoryRows, type InvRow } from "./InventoryPanel";
 import { MAGIC_DESIGNS, defaultColor, traditionDesign, type MagicDesign } from "../../fx";
 import { featuresOf, fontSlots, highestRank, type ClassState } from "../../classes";
 import { useCombat } from "../../combat";
-import { inOwlbear } from "../../obr";
+import { inOwlbear, patchNpc } from "../../obr";
 import { useActions } from "../ctx";
 import { NpcPicker, useNpcOptions } from "../NpcPicker";
 import { spellstrikeStep } from "../classActions";
@@ -59,6 +59,23 @@ const SPECIAL_LABEL: Record<Exclude<Special, null>, string> = {
   charge: "Un siervo suma 1d6 a su daño",
 };
 
+// Conjuros que dejan inmune un rato: Guía (a su objetivo) y Sentido del tiempo (al lanzador)
+type Cooldown = "guide" | "time" | null;
+const plain = (s: string) => s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim();
+const cooldownOf = (name: string): Cooldown => {
+  const n = plain(name);
+  if (n === "guia" || n === "guidance") return "guide";
+  if (n === "sentido del tiempo" || n === "time sense") return "time";
+  return null;
+};
+
+// Sobre quién se lanza Guía
+interface AidTarget {
+  key: string;
+  name: string;
+  cond?: Conditions;
+}
+
 // Pergaminos del inventario: "Scroll of Fireball (Rank 3)" → conjuro y rango
 const SCROLL_RE = /^scroll of\s+/i;
 export const isScroll = (name: string) => SCROLL_RE.test(name.trim());
@@ -75,7 +92,7 @@ const BASE_IMPULSES: [string, SpellMeta][] = [
 
 export function MagicPanel(props: SideProps) {
   const { character: c, state, extras, canEdit, canEditExtras, updateExtras, patch } = props;
-  const { roll, notify, playFx } = useActions();
+  const { roll, notify, playFx, isGm } = useActions();
   const { states } = useLiveStates();
   const combat = useCombat();
   const npcs = useNpcOptions();
@@ -84,6 +101,8 @@ export function MagicPanel(props: SideProps) {
   const [showColors, setShowColors] = useState(false);
   // Create Thrall lanzado sin tokens seleccionados: se ofrece vincularlos o crearlos
   const [thrallPrompt, setThrallPrompt] = useState(false);
+  // Guía esperando que se elija el objetivo
+  const [guidePick, setGuidePick] = useState<{ name: string; go: (t: AidTarget | null) => void } | null>(null);
   // Pergamino esperando confirmación (se consume al usarlo)
   const [confirmScroll, setConfirmScroll] = useState<string | null>(null);
   const [newScroll, setNewScroll] = useState({ n: "", rank: "1" });
@@ -169,13 +188,37 @@ export function MagicPanel(props: SideProps) {
 
   // ---------- Lanzar ----------
   // Devuelve si se intentó lanzar (aunque se pierda por Estupefacto)
-  const cast = async (name: string, rank: number, src: Src, k: SpellCaster | undefined, o: { amp?: boolean; defaults?: SpellMeta; from?: string } = {}): Promise<boolean> => {
+  const cast = async (name: string, rank: number, src: Src, k: SpellCaster | undefined, o: { amp?: boolean; defaults?: SpellMeta; from?: string; on?: AidTarget } = {}): Promise<boolean> => {
     if (!name || !canEdit || !available(src)) return false;
     const meta = metaOf(extras, name, o.defaults);
     const kind = meta.kind ?? "fx";
     const ampText = o.amp ? " (amplificado)" : "";
     const isImpulse = src.kind === "impulse";
     const stats = statsOf(k, isImpulse);
+    if (kind === "atk" && cantAttack(state?.cond)) return false;
+
+    // Guía: primero se elige el objetivo; si tiene el enfriamiento, es inmune y no se lanza
+    const cd = cooldownOf(name);
+    if (cd === "guide" && !o.on) {
+      return new Promise<boolean>((resolve) =>
+        setGuidePick({
+          name,
+          go: (t) => {
+            setGuidePick(null);
+            resolve(t ? cast(name, rank, src, k, { ...o, on: t }) : false);
+          },
+        }),
+      );
+    }
+    if (cd === "guide" && o.on?.cond?.guideCd) {
+      await notify({ label: `${name} sobre ${o.on.name}:`, title: "Inmune a Guía", detail: `${o.on.name} es inmune a Guía por ahora (Enfriamiento de Guía)`, tag: "Conjuro" });
+      return false;
+    }
+    // Sentido del tiempo solo se lanza sobre uno mismo
+    if (cd === "time" && state?.cond.timeCd) {
+      await notify({ label: `${name}:`, title: "Inmune a Sentido del tiempo", detail: `${c.name} es inmune a Sentido del tiempo por ahora (Enfriamiento)`, tag: "Conjuro" });
+      return false;
+    }
 
     // Estupefacto: prueba plana CD 5 + X o el conjuro se pierde (el recurso se gasta igual)
     const stup = state?.cond.stupefied ?? 0;
@@ -191,7 +234,7 @@ export function MagicPanel(props: SideProps) {
     consume(src, o.amp);
 
     // Conjuro de un solo objetivo contra alguien escondido u oculto: prueba plana antes
-    const flatDc = target && kind !== "fx" && !meta.area ? targetFlatDc(target.state.cond, me) : 0;
+    const flatDc = target && kind !== "fx" && !meta.area ? targetFlatDc(target.state.cond, me, state?.cond) : 0;
     if (target && flatDc) {
       const fr = await roll({ label: `${name}: prueba plana (${FLAT_LABEL[flatDc]})`, formula: "1d20", kind: "flat", flat: { dc: flatDc, label: FLAT_LABEL[flatDc] }, tag: "Conjuro" });
       if (fr && fr.degree !== "success") {
@@ -200,7 +243,7 @@ export function MagicPanel(props: SideProps) {
       }
     }
     // Escondido de su objetivo: lo encuentra desprevenido
-    const og = !!target && hiddenFrom(state?.cond, `npc:${target.tok}`) && !target.state.cond.offGuard ? 2 : 0;
+    const og = !!target && unseenBy(state?.cond, target.state.cond, `npc:${target.tok}`) && !isOffGuard(target.state.cond) ? 2 : 0;
 
     const design = designFor(name, meta, src, k);
     playFx({ kind: design, from: me, color: colorFor(design) });
@@ -211,6 +254,7 @@ export function MagicPanel(props: SideProps) {
     const ssSingle = !!cls.ss?.armed && (prefs.ssSingle ?? true);
     const detail = [
       o.from ?? "",
+      o.on ? `Sobre ${o.on.name}` : "",
       isImpulse ? `Nivel ${c.level}` : rank > 0 ? `Rango ${rank}` : "Truco",
       kind === "save" ? `Salvación de ${SAVE_LABEL[meta.save ?? "reflex"]}${meta.basic ? " básica" : ""} · CD ${stats.dc}` : kind === "atk" ? (ssSingle ? "Ataque con el Golpe de conjuro" : "Ataque") : "Efecto",
       meta.blood && f.bloodMagic ? "🩸 Magia de sangre" : "",
@@ -235,6 +279,12 @@ export function MagicPanel(props: SideProps) {
       degree = r?.degree;
     } else {
       await notify({ label: o.from ? `Lanza desde ${o.from.toLowerCase()}` : "Lanza", title: `${name}${ampText}`, detail, tag: "Conjuro" });
+    }
+    // Guía deja al objetivo inmune un rato. Los jugadores no pueden escribir en los PNJ: ahí lo marca el GM.
+    if (cd === "guide" && o.on) {
+      const id = o.on.key.slice(o.on.key.indexOf(":") + 1);
+      if (o.on.key.startsWith("pc:")) await live.patch(id, (s) => ({ ...s, cond: { ...s.cond, guideCd: true } }));
+      else if (isGm && inOwlbear) await patchNpc(id, (n) => ({ ...n, cond: { ...n.cond, guideCd: true } }));
     }
     setLastCast(c.id, {
       name: `${name}${ampText}`,
@@ -315,16 +365,25 @@ export function MagicPanel(props: SideProps) {
   };
 
   // ---------- Filas ----------
-  const castBtn = (name: string, rank: number, src: Src, k?: SpellCaster, o: { amp?: boolean; defaults?: SpellMeta; label?: string } = {}) => (
-    <button
-      className={`btn small-btn cast-btn ${o.amp ? "amp" : ""}`}
-      disabled={!canEdit || !name || !available(src) || (o.amp && focusNow <= 0)}
-      title={!available(src) ? (src.kind === "impulse" ? "Activa tu aura cinética" : "Sin recursos") : undefined}
-      onClick={() => cast(name, rank, src, k, o)}
-    >
-      {o.label ?? "Lanzar"}
-    </button>
-  );
+  const castBtn = (name: string, rank: number, src: Src, k?: SpellCaster, o: { amp?: boolean; defaults?: SpellMeta; label?: string } = {}) => {
+    const noAttack = cantAttack(state?.cond) && (metaOf(extras, name, o.defaults).kind ?? "fx") === "atk";
+    return (
+      <button
+        className={`btn small-btn cast-btn ${o.amp ? "amp" : ""}`}
+        disabled={!canEdit || !name || !available(src) || (o.amp && focusNow <= 0) || noAttack}
+        title={noAttack ? RESTRAINED_MSG : !available(src) ? (src.kind === "impulse" ? "Activa tu aura cinética" : "Sin recursos") : undefined}
+        onClick={() => cast(name, rank, src, k, o)}
+      >
+        {o.label ?? "Lanzar"}
+      </button>
+    );
+  };
+
+  // Posibles objetivos de Guía: los PJ y mascotas de la sala y los PNJ que se ven
+  const aidTargets: AidTarget[] = [
+    ...Object.values(states).map((s) => ({ key: `pc:${s.id}`, name: s.name, cond: s.cond })),
+    ...npcs.map((n) => ({ key: `npc:${n.tok}`, name: n.name, cond: n.state.cond })),
+  ];
 
   const addRow = (group: string) => {
     const v = (newRow[group] ?? "").trim();
@@ -453,7 +512,8 @@ export function MagicPanel(props: SideProps) {
             </span>
             <button
               className="btn small-btn"
-              title={a.notes}
+              title={cantAttack(state?.cond) ? RESTRAINED_MSG : a.notes}
+              disabled={cantAttack(state?.cond)}
               onClick={() =>
                 roll({ label: `${k.name}: Ataque de conjuro`, formula: `1d20${fmtMod(a.attack)}`, kind: "check", notes: a.notes, vs: target ? { dc: target.ac, name: target.name } : undefined, fx: { kind: "spell" } })
               }
@@ -464,6 +524,24 @@ export function MagicPanel(props: SideProps) {
           </div>
         );
       })}
+
+      {guidePick && (
+        <div className="aid-pick" role="dialog" aria-label={`${guidePick.name}: objetivo`}>
+          <div className="ds-head">
+            <b>{guidePick.name}: ¿sobre quién?</b>
+            <button className="ds-close" title="Cancelar" onClick={() => guidePick.go(null)}>
+              ✕
+            </button>
+          </div>
+          <div className="cb-row">
+            {aidTargets.map((t) => (
+              <button key={t.key} className="chip" onClick={() => guidePick.go(t)}>
+                {t.key === me ? `${t.name} (tú)` : t.name}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {thrallPrompt && f.thrall && (
         <ThrallLinker

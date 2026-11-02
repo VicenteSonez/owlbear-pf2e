@@ -1,4 +1,6 @@
 import { useState } from "react";
+import type { Character } from "../../pathbuilder";
+import type { Extras } from "../../extras";
 import type { Resources } from "../../live";
 import { Counter, EditableName, PanelHead } from "./common";
 import { setIn, type SideProps } from "./types";
@@ -39,26 +41,48 @@ function AlchemyCounter(props: {
   );
 }
 
-export function RecipesPanel({ character: c, state, extras, canEdit, canEditExtras, updateExtras, patch }: SideProps) {
-  const [newName, setNewName] = useState("");
-  const res: Resources = state?.res ?? {};
-  const patchRes = (fn: (r: Resources) => Resources) => patch((s) => ({ ...s, res: fn(s.res ?? {}) }));
+// Lotes de Alquimia avanzada y viales versátiles: qué tiene el personaje y cuántos le quedan
+export function alchemyPools(c: Character, res: Resources) {
   const alch = c.alchemy ?? { alchemist: false, advanced: false, quick: false };
   const int = c.abilities.int ?? 0;
   // Máximos predeterminados: solo el alquimista los trae calculados (4 + Int y 2 + Int)
   const aaMax = res.aaMax !== undefined ? res.aaMax : alch.alchemist ? 4 + int : null;
   const vvMax = res.vvMax !== undefined ? res.vvMax : alch.alchemist ? 2 + int : null;
-  const aa = res.aa ?? aaMax ?? 0;
-  const vv = res.vv ?? vvMax ?? 0;
-  const showAA = alch.advanced || alch.alchemist;
-  const showVV = alch.quick || alch.alchemist;
+  return {
+    aaMax,
+    vvMax,
+    aa: res.aa ?? aaMax ?? 0,
+    vv: res.vv ?? vvMax ?? 0,
+    showAA: alch.advanced || alch.alchemist,
+    showVV: alch.quick || alch.alchemist,
+  };
+}
 
-  const rows = [
+export function recipeRows(c: Character, extras: Extras) {
+  return [
     ...(c.formulas ?? []).map((name) => ({ key: `rec:${name}`, name, added: false })),
     ...(extras.added ?? []).filter((a) => a.list === "recipe").map((a) => ({ key: a.key, name: a.name, added: true })),
   ];
+}
+
+// Cuántos de una receta se hicieron con Alquimia rápida (nunca más que la cantidad)
+export const quickMade = (extras: Extras, key: string) => Math.min(extras.qmade?.[key] ?? 0, extras.qty?.[key] ?? 0);
+
+export function RecipesPanel({ character: c, state, extras, canEdit, canEditExtras, updateExtras, patch }: SideProps) {
+  const [newName, setNewName] = useState("");
+  const res: Resources = state?.res ?? {};
+  const patchRes = (fn: (r: Resources) => Resources) => patch((s) => ({ ...s, res: fn(s.res ?? {}) }));
+  const { aaMax, vvMax, aa, vv, showAA, showVV } = alchemyPools(c, res);
+
+  const rows = recipeRows(c, extras);
   const qtyOf = (key: string) => extras.qty?.[key] ?? 0;
-  const addQty = (key: string, n: number) => updateExtras((x) => ({ ...x, qty: setIn(x.qty, key, Math.max(0, (x.qty?.[key] ?? 0) + n) || undefined) }));
+  // Con Alquimia rápida también se anota en qmade, para gastarlos primero
+  const addQty = (key: string, n: number, quick = false) =>
+    updateExtras((x) => ({
+      ...x,
+      qty: setIn(x.qty, key, Math.max(0, (x.qty?.[key] ?? 0) + n) || undefined),
+      qmade: quick ? setIn(x.qmade, key, quickMade(x, key) + n || undefined) : x.qmade,
+    }));
 
   return (
     <div className="side-panel">
@@ -110,7 +134,11 @@ export function RecipesPanel({ character: c, state, extras, canEdit, canEditExtr
               canEdit={canEditExtras}
               onChange={(v) => updateExtras((x) => ({ ...x, names: setIn(x.names, r.key, v && v !== r.name ? v : undefined) }))}
             />
-            <Counter value={qtyOf(r.key)} canEdit={canEditExtras} onChange={(v) => updateExtras((x) => ({ ...x, qty: setIn(x.qty, r.key, v || undefined) }))} />
+            <Counter
+              value={qtyOf(r.key)}
+              canEdit={canEditExtras}
+              onChange={(v) => updateExtras((x) => ({ ...x, qty: setIn(x.qty, r.key, v || undefined), qmade: setIn(x.qmade, r.key, Math.min(v, x.qmade?.[r.key] ?? 0) || undefined) }))}
+            />
             {showAA && (
               <button
                 className="btn small-btn"
@@ -130,7 +158,7 @@ export function RecipesPanel({ character: c, state, extras, canEdit, canEditExtr
                 disabled={!canEditExtras || !canEdit || vv <= 0}
                 title="Alquimia rápida: +1 de este objeto, −1 vial versátil"
                 onClick={() => {
-                  addQty(r.key, 1);
+                  addQty(r.key, 1, true);
                   patchRes((x) => ({ ...x, vv: vv - 1 }));
                 }}
               >
@@ -141,7 +169,7 @@ export function RecipesPanel({ character: c, state, extras, canEdit, canEditExtr
               <button
                 className="row-x"
                 title="Quitar receta"
-                onClick={() => updateExtras((x) => ({ ...x, added: (x.added ?? []).filter((a) => a.key !== r.key), qty: setIn(x.qty, r.key, undefined) }))}
+                onClick={() => updateExtras((x) => ({ ...x, added: (x.added ?? []).filter((a) => a.key !== r.key), qty: setIn(x.qty, r.key, undefined), qmade: setIn(x.qmade, r.key, undefined) }))}
               >
                 ✕
               </button>

@@ -6,6 +6,8 @@ import {
   deathAt,
   effectiveAc,
   effectiveMaxHp,
+  isImmobilized,
+  linkedSource,
   modsText,
   shieldBroken,
 } from "../rules";
@@ -89,8 +91,13 @@ export function Vitals({ character: c, state: s, canEdit, showLink, token, onPat
           <div className="sub muted">
             {c.background} · {c.size} ·{" "}
             <span className="speed" title={speedTitle(c)}>
-              {c.speed} ft
-            </span>{" "}
+              {isImmobilized(s.cond) ? <s>{c.speed} ft</s> : `${c.speed} ft`}
+            </span>
+            {isImmobilized(s.cond) && (
+              <span className="badge bad speed-stop" title={linkedSource(s.cond, "immobilized") && !s.cond.immobilized ? `Por ${linkedSource(s.cond, "immobilized")}` : "No puede moverse"}>
+                Inmovilizado
+              </span>
+            )}{" "}
             · CD clase {c.classDc}
           </div>
           {c.senses && c.senses.length > 0 && <div className="sub senses">👁 {c.senses.join(" · ")}</div>}

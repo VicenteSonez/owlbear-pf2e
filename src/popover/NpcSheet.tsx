@@ -11,11 +11,14 @@ import {
   addPersistent,
   autoIwr,
   checkAdjust,
-  hiddenFrom,
+  isOffGuard,
   levelDc,
   modsText,
   stackMods,
   targetFlatDc,
+  unseenBy,
+  RESTRAINED_MSG,
+  cantAttack,
   withBuff,
   type Degree,
   type IwrPick,
@@ -104,7 +107,7 @@ export function NpcSheet({ tokenId, itemName, state: n, states, onPatch }: Props
 
   // Objetivo escondido u oculto de este PNJ: prueba plana (secreta) antes; con un fallo, falla
   const flatCheck = async (what: string, pc: PcState | undefined) => {
-    const dc = targetFlatDc(pc?.cond, `npc:${tokenId}`);
+    const dc = targetFlatDc(pc?.cond, `npc:${tokenId}`, n.cond);
     if (!dc) return true;
     const r = await roll({ label: `${name}: ${what}: prueba plana (${FLAT_LABEL[dc]})`, formula: "1d20", kind: "flat", flat: { dc, label: FLAT_LABEL[dc] }, secret: true, charName: name }, { quick: true });
     if (r?.degree === "success") return true;
@@ -131,8 +134,8 @@ export function NpcSheet({ tokenId, itemName, state: n, states, onPatch }: Props
     // Burlar (explorador): +1 circunstancial a la CA contra su presa
     const outwit = pc?.cls?.prey === tokenId && pc.cls.edge === "outwit" ? 1 : 0;
     // El PJ no ve al PNJ escondido: queda desprevenido ante el ataque
-    const og = hiddenFrom(n.cond, n.target) && !pc?.cond.offGuard ? 2 : 0;
-    const offGuard = !!og || !!pc?.cond.offGuard;
+    const og = unseenBy(n.cond, pc?.cond, n.target) && !isOffGuard(pc?.cond) ? 2 : 0;
+    const offGuard = !!og || isOffGuard(pc?.cond);
     // Condiciones, íconos del ejemplar y los bonos a mano del PNJ
     const adj = stackMods([...checkAdjust(cond, { kind: "attack", melee: a.melee, finesse: !!a.dex, target: n.target }).applied, ...ik.atk, ...npcAtkMods(n.mods, offGuard)]);
     const r = await roll(
@@ -301,7 +304,7 @@ export function NpcSheet({ tokenId, itemName, state: n, states, onPatch }: Props
       if (!tgt) return;
       const ik = ikonVsAttack(pc, false);
       const adj = checkAdjust(cond, { kind: "spell-attack", target: n.target });
-      const og = hiddenFrom(n.cond, n.target) && !pc?.cond.offGuard ? 2 : 0;
+      const og = unseenBy(n.cond, pc?.cond, n.target) && !isOffGuard(pc?.cond) ? 2 : 0;
       const r = await roll(
         {
           label: `${name}: ${sp.n} (${sp.pow ? "ataque" : "ataque de conjuro"})`,
@@ -497,7 +500,7 @@ export function NpcSheet({ tokenId, itemName, state: n, states, onPatch }: Props
               {[0, 1, 2].map((m) => {
                 const adj = stackMods([...checkAdjust(cond, { kind: "attack", melee: a.melee, finesse: !!a.dex, target: n.target }).applied, ...npcAtkMods(n.mods)]);
                 return (
-                  <button key={m} className={`btn ${adj.total < 0 ? "down" : ""}`} disabled={!n.target} title={n.target ? modsText(adj.applied) || undefined : "Elige un objetivo"} onClick={() => rollAttack(a, m)}>
+                  <button key={m} className={`btn ${adj.total < 0 ? "down" : ""}`} disabled={!n.target || cantAttack(n.cond)} title={cantAttack(n.cond) ? RESTRAINED_MSG : n.target ? modsText(adj.applied) || undefined : "Elige un objetivo"} onClick={() => rollAttack(a, m)}>
                     {fmtMod(a.atk + adj.total - (a.agile ? 4 : 5) * m)}
                   </button>
                 );
@@ -595,7 +598,7 @@ export function NpcSheet({ tokenId, itemName, state: n, states, onPatch }: Props
         edit={editSp}
         onPatch={onPatch}
         onCast={castSpell}
-        blocked={(sp) => (sp.kind === "atk" && !n.target ? "Elige un objetivo" : null)}
+        blocked={(sp) => (sp.kind !== "atk" ? null : cantAttack(n.cond) ? RESTRAINED_MSG : n.target ? null : "Elige un objetivo")}
       />
       {saveFor && (
         <SaveRequestForm

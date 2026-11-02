@@ -1,5 +1,5 @@
-// Pestaña de sanación: descansar, ayudas contra el daño persistente, botiquín de sanador,
-// Primeros auxilios y, con Medicina entrenada, Tratar heridas.
+// Pestaña de sanación: descansar, habilidades curativas, consumibles de curación, ayudas contra
+// el daño persistente, botiquín de sanador, Primeros auxilios y, con Medicina entrenada, Tratar heridas.
 import { useState } from "react";
 import { fmtMod } from "../../pathbuilder";
 import { live, useLiveStates, type PcState } from "../../live";
@@ -10,6 +10,7 @@ import { useActions } from "../ctx";
 import { PanelHead } from "./common";
 import { IconBed } from "./icons";
 import { inventoryRows } from "./InventoryPanel";
+import { HealAbilities, HealConsumables } from "./HealExtras";
 import type { SideProps } from "./types";
 
 // Actividades que piden botiquín (se puede marcar a mano cada una)
@@ -33,7 +34,8 @@ const TREAT_TIERS: { dc: number; prof: number; bonus: number; label: string }[] 
   { dc: 40, prof: 8, bonus: 50, label: "Legendario" },
 ];
 
-export function HealPanel({ character: c, state, extras, canEdit, canEditExtras, updateExtras, patch }: SideProps) {
+export function HealPanel(props: SideProps) {
+  const { character: c, state, extras, canEdit, canEditExtras, updateExtras, patch } = props;
   const { roll, notify } = useActions();
   const { states } = useLiveStates();
   const prefs: HealPrefs = extras.heal ?? {};
@@ -168,6 +170,9 @@ export function HealPanel({ character: c, state, extras, canEdit, canEditExtras,
           onBlur={() => setPrefs((p) => ({ ...p, restBonus: bonus.trim() || undefined }))}
         />
       </div>
+
+      <HealAbilities {...props} />
+      <HealConsumables {...props} />
 
       <h3>Daño persistente</h3>
       <div className="cb-row">

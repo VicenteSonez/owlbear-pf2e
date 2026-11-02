@@ -1611,6 +1611,13 @@ input.sm2 { width: 92px; }
 .te-field select { width: 100%; background: #101216; border: 1px solid var(--line); border-radius: 3px; padding: 2px 4px; color: var(--text); }
 .te-view { flex: 1.4; min-width: 0; background: #101216; border: 1px solid var(--line); border-radius: 3px; color: var(--text); font-size: 11px; }
 .thrall-linker { display: flex; flex-direction: column; gap: 5px; padding: 6px 8px; margin: 6px 0; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+/* Objetivo de Guía: flota abajo para verse desde cualquier parte de la lista */
+.aid-pick { position: fixed; left: 10px; right: 10px; bottom: 10px; z-index: 30; display: flex; flex-direction: column; gap: 6px; padding: 8px 10px 10px; background: #1b1e25; border: 1px solid var(--accent); border-radius: 6px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6); }
+.aid-pick .ds-head { display: flex; align-items: center; gap: 8px; }
+.aid-pick .ds-close { margin-left: auto; }
+.speed-stop { margin-left: 4px; }
+.cond-cell.linked { opacity: 0.85; border-style: dashed; }
+.cond-cell .cond-link { display: block; font-size: 9.5px; color: var(--muted); }
 .thrall-linker.prompt { border-color: #7a5cff; box-shadow: 0 0 10px rgba(122, 92, 255, 0.45); }
 .tl-head { display: flex; align-items: center; gap: 6px; }
 .tl-head .link-btn { margin-left: auto; }
@@ -1724,3 +1731,15 @@ input.sm2 { width: 92px; }
 }
 .ex-empty { padding: 8px 2px; }
 .init-hints { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 6px; }
+.heal-abilities, .heal-items { display: flex; flex-direction: column; gap: 4px; }
+.heal-ab .feat-row { display: flex; align-items: center; gap: 6px; }
+.heal-ab .feat-name { flex: 1; text-align: left; color: var(--text); text-decoration: none; }
+.heal-use { display: flex; flex-direction: column; gap: 2px; padding: 4px 6px 6px; }
+.heal-use p { margin: 0; white-space: pre-wrap; }
+.heal-targets { flex-wrap: wrap; }
+.heal-add { align-self: flex-start; border-style: dashed; }
+.heal-ab-form { display: flex; flex-direction: column; gap: 4px; padding: 6px; border: 1px solid #2e6b40; border-radius: 6px; background: rgba(63, 174, 90, 0.06); }
+.heal-ab-form textarea { min-height: 40px; resize: vertical; }
+.heal-item { padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
+.heal-item.empty { opacity: 0.6; }
+.heal-item .hi-stock { margin-left: auto; }

@@ -46,6 +46,11 @@ export interface WeaponFlags {
   // Rasgos de crítico (0 = sin el rasgo), arrojadiza cuerpo a cuerpo y salpicadura
   deadly?: number;
   fatal?: number;
+  // Dos manos / Puntería fatal (0 = sin el rasgo), agarre a dos manos y Apuñalador
+  twoHand?: number;
+  fatalAim?: number;
+  grip2?: boolean;
+  backstabber?: boolean;
   throwRange?: number;
   splash?: { f: string; ty: string; r?: number } | null;
   mat?: string;
@@ -77,6 +82,10 @@ export function applyWeaponFlags(w: Weapon, f: WeaponFlags | undefined): Weapon 
     extra: base.extra.map((e) => ({ ...e, active: f.extras?.[extraKey(e)] ?? e.active })),
     deadly: f.deadly === undefined ? base.deadly : f.deadly || undefined,
     fatal: f.fatal === undefined ? base.fatal : f.fatal || undefined,
+    twoHand: f.twoHand === undefined ? base.twoHand : f.twoHand || undefined,
+    fatalAim: f.fatalAim === undefined ? base.fatalAim : f.fatalAim || undefined,
+    grip2: f.grip2 ?? base.grip2,
+    backstabber: f.backstabber ?? base.backstabber,
     throwRange: f.throwRange === undefined ? base.throwRange : f.throwRange || undefined,
     splash: f.splash === undefined ? base.splash : f.splash ?? undefined,
     mat: f.mat ?? base.mat,

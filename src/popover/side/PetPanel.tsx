@@ -3,7 +3,7 @@ import OBR from "@owlbear-rodeo/sdk";
 import { fmtMod, type Pet } from "../../pathbuilder";
 import { live, petStateId, useLiveStates, type PcState } from "../../live";
 import { inOwlbear, linkToken, unlinkToken } from "../../obr";
-import { applyDamage, applyHealing, checkAdjust, effectiveAc, effectiveMaxHp, modsText, stackMods, type Mod, type RollCtx } from "../../rules";
+import { RESTRAINED_MSG, applyDamage, applyHealing, cantAttack, checkAdjust, effectiveAc, effectiveMaxHp, modsText, stackMods, type Mod, type RollCtx } from "../../rules";
 import { hpColor, newId } from "../../shared";
 import { store } from "../../storage";
 import { parseFormula } from "../../dice";
@@ -447,7 +447,7 @@ function PetCard(props: SideProps & { pet: Pet; index: number; onRoll: (r: RollR
                 </div>
                 <div className="weapon-btns">
                   {[0, 1, 2].map((m) => (
-                    <button key={m} className="btn" onClick={() => rollAttack(at, m)}>
+                    <button key={m} className="btn" disabled={cantAttack(s?.cond)} title={cantAttack(s?.cond) ? RESTRAINED_MSG : undefined} onClick={() => rollAttack(at, m)}>
                       {fmtMod(at.attack - mapStep(at) * m)}
                     </button>
                   ))}

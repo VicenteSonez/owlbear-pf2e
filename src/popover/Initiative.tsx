@@ -28,7 +28,7 @@ export function initOptions(c: Character): InitOption[] {
 // Fórmula de iniciativa con las condiciones que la afectan (Asustado, Enfermo…) y el bono
 // de Atento de quien vigile en exploración
 export function initFormula(opt: InitOption, state?: PcState, scout = 0) {
-  const a = checkAdjust(state?.cond, opt.ctx);
+  const a = checkAdjust(state?.cond, opt.ctx.kind === "perception" || opt.ctx.kind === "skill" ? { ...opt.ctx, init: true } : opt.ctx);
   const notes = [modsText(a.applied), scout ? `Atento +${scout}` : ""].filter(Boolean).join(", ");
   const value = opt.base + a.total + scout;
   return { formula: `1d20${fmtMod(value)}`, notes: notes || undefined, value };

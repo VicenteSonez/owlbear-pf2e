@@ -9,6 +9,9 @@ import {
   effectiveAc,
   effectiveMaxHp,
   lifeIwr,
+  linkedSource,
+  normalizeCond,
+  OVERRIDES,
   addPersistent as withPersistent,
   modsText,
   persistentByType,
@@ -42,7 +45,7 @@ interface Props {
 // Quita las condiciones en 0 para que la metadata de la sala ocupe lo mínimo
 function clean(c: Conditions): Conditions {
   const out: Conditions = {};
-  for (const [k, v] of Object.entries(c)) {
+  for (const [k, v] of Object.entries(normalizeCond(c))) {
     if (v === undefined || v === false || v === 0) continue;
     // hidFrom vacío significa "escondido de nadie" (sin lista sería de todos)
     if (Array.isArray(v) && v.length === 0 && k !== "hidFrom") continue;
@@ -188,11 +191,17 @@ export function EffectsPanel({ target, states, onPatchPc, onPatchNpc, onOpenShee
       <div className="cond-grid">
         {CONDITIONS.map((def) => {
           const v = valued(def);
-          const active = def.valued ? v > 0 : !!cond[def.id];
+          const own = def.valued ? v > 0 : !!cond[def.id];
+          // Ligada a Agarrado/Restringido (se va con ella) o anulada por otra (Cegado, Restringido)
+          const link = linkedSource(cond, def.id);
+          const over = OVERRIDES[def.id as ToggleCondition];
+          const overBy = over && cond[over.by] ? over.label : undefined;
+          const active = own || !!link;
           return (
-            <div key={def.id} className={`cond-cell ${active ? "on" : ""}`} title={def.desc}>
+            <div key={def.id} className={`cond-cell ${active ? "on" : ""} ${link && !own ? "linked" : ""}`} title={overBy ? `Lo anula ${overBy}` : link && !own ? `Por ${link}: se quita con él` : def.desc}>
               <button
                 className="cond-toggle"
+                disabled={!!overBy || (!!link && !own)}
                 onClick={() =>
                   def.valued
                     ? setValued(def, active ? 0 : 1)
@@ -204,7 +213,11 @@ export function EffectsPanel({ target, states, onPatchPc, onPatchNpc, onOpenShee
                 }
               >
                 <img src={iconUrl(def.icon)} alt="" width={24} height={24} />
-                <span>{def.label}</span>
+                <span>
+                  {def.label}
+                  {link && !own && <small className="cond-link">por {link}</small>}
+                  {overBy && <small className="cond-link">anulado por {overBy}</small>}
+                </span>
               </button>
               {def.valued && (
                 <div className="cond-val">

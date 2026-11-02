@@ -131,6 +131,18 @@ export interface Conditions {
   // ven; sin lista, de todos. Al jugador solo se le muestra "Escondido" (el GM sabe de quién).
   hidden?: boolean;
   hidFrom?: string[];
+  // Encandilado: todos le parecen ocultos. Cegado (anula Encandilado): todos le parecen escondidos.
+  dazzled?: boolean;
+  blinded?: boolean;
+  deafened?: boolean;
+  fascinated?: boolean;
+  // Inmune por un rato a Guía y a Sentido del tiempo
+  guideCd?: boolean;
+  timeCd?: boolean;
+  // Agarrado y Restringido (anula Agarrado) traen Inmovilizado y Desprevenido ligados
+  immobilized?: boolean;
+  grabbed?: boolean;
+  restrained?: boolean;
   frightened?: number;
   sickened?: number;
   enfeebled?: number;
@@ -140,13 +152,29 @@ export interface Conditions {
   // Bono de cobertura a la CA: 1 menor, 2 media, 4 mayor
   cover?: 1 | 2 | 4;
   fastHealing?: number;
+  // Rondas que le quedan a la sanación rápida (tónico calmante); sin valor, no vence
+  fhR?: number;
   persistent?: PersistentDamage[];
   buffs?: Buff[];
 }
 
 export type ValuedCondition = "frightened" | "sickened" | "enfeebled" | "clumsy" | "stupefied" | "drained" | "fastHealing";
 
-export type ToggleCondition = "offGuard" | "fatigued" | "concealed" | "hidden" | "invisible";
+export type ToggleCondition =
+  | "offGuard"
+  | "fatigued"
+  | "concealed"
+  | "hidden"
+  | "invisible"
+  | "dazzled"
+  | "blinded"
+  | "deafened"
+  | "fascinated"
+  | "immobilized"
+  | "grabbed"
+  | "restrained"
+  | "guideCd"
+  | "timeCd";
 
 export interface ConditionDef {
   id: ToggleCondition | ValuedCondition;
@@ -154,6 +182,37 @@ export interface ConditionDef {
   icon: string;
   valued: boolean;
   desc: string;
+}
+
+// Condiciones que traen otras ligadas (se van con ella) y las que anulan a otra
+const LINKED: { from: "grabbed" | "restrained"; label: string }[] = [
+  { from: "restrained", label: "Restringido" },
+  { from: "grabbed", label: "Agarrado" },
+];
+export const OVERRIDES: Partial<Record<ToggleCondition, { by: ToggleCondition; label: string }>> = {
+  dazzled: { by: "blinded", label: "Cegado" },
+  grabbed: { by: "restrained", label: "Restringido" },
+};
+
+// De dónde le viene una condición ligada (Desprevenido o Inmovilizado), si viene de otra
+export function linkedSource(c: Conditions | undefined, id: string): string | undefined {
+  if (!c || (id !== "offGuard" && id !== "immobilized")) return undefined;
+  return LINKED.find((l) => c[l.from])?.label;
+}
+
+export const isOffGuard = (c: Conditions | undefined) => !!c && (!!c.offGuard || !!linkedSource(c, "offGuard"));
+export const isImmobilized = (c: Conditions | undefined) => !!c && (!!c.immobilized || !!linkedSource(c, "immobilized"));
+// Restringido: no puede atacar
+export const cantAttack = (c: Conditions | undefined) => !!c?.restrained;
+export const RESTRAINED_MSG = "Restringido: no puede atacar.";
+
+// Quita lo anulado: Cegado anula Encandilado y Restringido anula Agarrado
+export function normalizeCond(c: Conditions): Conditions {
+  let out = c;
+  for (const [id, o] of Object.entries(OVERRIDES)) {
+    if (out[o!.by] && out[id as ToggleCondition]) out = { ...out, [id]: undefined };
+  }
+  return out;
 }
 
 export const CONDITIONS: ConditionDef[] = [
@@ -168,6 +227,27 @@ export const CONDITIONS: ConditionDef[] = [
     desc: "Prueba plana CD 11 para elegirlo de objetivo. Sus ataques encuentran desprevenido a quien no lo ve. Puede estar escondido de unos y no de otros.",
   },
   { id: "invisible", label: "Invisible", icon: "invisible", valued: false, desc: "Escondido de todos: prueba plana CD 11 para elegirlo de objetivo y sus ataques encuentran desprevenido al objetivo." },
+  { id: "dazzled", label: "Encandilado", icon: "dazzled", valued: false, desc: "Todos le parecen ocultos: prueba plana CD 5 antes de cada ataque o conjuro de un solo objetivo." },
+  {
+    id: "blinded",
+    label: "Cegado",
+    icon: "blinded",
+    valued: false,
+    desc: "Anula Encandilado. Todos le parecen escondidos (prueba plana CD 11 para elegirlos de objetivo) y quienes lo atacan lo encuentran desprevenido. −4 de estado a Percepción.",
+  },
+  { id: "deafened", label: "Ensordecido", icon: "deafened", valued: false, desc: "−2 de estado a la iniciativa." },
+  { id: "fascinated", label: "Fascinado", icon: "fascinated", valued: false, desc: "−2 de estado a Percepción y a las pruebas de habilidad." },
+  { id: "immobilized", label: "Inmovilizado", icon: "immobilized", valued: false, desc: "No puede moverse." },
+  { id: "grabbed", label: "Agarrado", icon: "grabbed", valued: false, desc: "Inmovilizado y desprevenido mientras dure (se van con él)." },
+  {
+    id: "restrained",
+    label: "Restringido",
+    icon: "restrained",
+    valued: false,
+    desc: "Anula Agarrado. Inmovilizado y desprevenido mientras dure (se van con él) y no puede atacar.",
+  },
+  { id: "guideCd", label: "Enfriamiento de Guía", icon: "guidance-cd", valued: false, desc: "Inmune a Guía: si se la lanzan, se avisa y no tiene efecto. Se pone sola al recibir Guía; se quita a mano." },
+  { id: "timeCd", label: "Enfriamiento de Sentido del tiempo", icon: "time-cd", valued: false, desc: "Inmune a Sentido del tiempo: si lo lanza, se avisa y no tiene efecto." },
   {
     id: "frightened",
     label: "Asustado",
@@ -219,7 +299,12 @@ export function activeConditionIcons(c: Conditions | undefined): { icon: string;
   const out: { icon: string; label: string; value?: number }[] = [];
   for (const def of CONDITIONS) {
     const v = c[def.id];
-    if (def.valued ? typeof v === "number" && v > 0 : v) out.push({ icon: def.icon, label: def.label, value: def.valued ? (v as number) : undefined });
+    const over = OVERRIDES[def.id as ToggleCondition];
+    if (over && c[over.by]) continue;
+    const link = linkedSource(c, def.id);
+    if (def.valued ? typeof v === "number" && v > 0 : v || link) {
+      out.push({ icon: def.icon, label: link && !v ? `${def.label} (${link})` : def.label, value: def.valued ? (v as number) : undefined });
+    }
   }
   const cover = COVERS.find((x) => x.value === c.cover);
   if (cover) out.push({ icon: cover.icon, label: cover.label });
@@ -230,9 +315,10 @@ export function activeConditionIcons(c: Conditions | undefined): { icon: string;
 
 // ---------- Qué condiciones afectan a cada tirada ----------
 
+// init: la prueba es de iniciativa (Ensordecido)
 export type RollCtx =
-  | { kind: "skill"; key: string; ability: Ability }
-  | { kind: "perception" }
+  | { kind: "skill"; key: string; ability: Ability; init?: boolean }
+  | { kind: "perception"; init?: boolean }
   | { kind: "save"; key: "fortitude" | "reflex" | "will"; fear?: boolean }
   // target: clave de quien recibe el ataque ("pc:<id>" o "npc:<tokenId>"), para Provocar
   | { kind: "attack"; melee: boolean; finesse: boolean; target?: string }
@@ -273,6 +359,8 @@ export function conditionMods(c: Conditions | undefined, ctx: RollCtx, shield?: 
     status("Asustado", cond.frightened);
     status("Enfermo", cond.sickened);
   }
+  if ((ctx.kind === "perception" || ctx.kind === "skill") && ctx.init && cond.deafened) status("Ensordecido", 2);
+  if ((ctx.kind === "perception" || ctx.kind === "skill") && cond.fascinated) status("Fascinado", 2);
   // Bonos temporales de otros (Himno valeroso, Provocar…)
   for (const b of cond.buffs ?? []) {
     const isAttack = ctx.kind === "attack" || ctx.kind === "spell-attack" || ctx.kind === "impulse-attack";
@@ -286,7 +374,10 @@ export function conditionMods(c: Conditions | undefined, ctx: RollCtx, shield?: 
   }
   switch (ctx.kind) {
     case "ac":
-      if (cond.offGuard) mods.push({ label: "Desprevenido", type: "circumstance", value: -2 });
+      if (isOffGuard(cond)) {
+        const link = cond.offGuard ? undefined : linkedSource(cond, "offGuard");
+        mods.push({ label: link ? `Desprevenido (${link})` : "Desprevenido", type: "circumstance", value: -2 });
+      }
       if (cond.fatigued) mods.push({ label: "Fatigado", type: "status", value: -1 });
       status("Torpe", cond.clumsy);
       if (cond.cover) mods.push({ label: COVERS.find((x) => x.value === cond.cover)!.label, type: "circumstance", value: cond.cover });
@@ -305,6 +396,7 @@ export function conditionMods(c: Conditions | undefined, ctx: RollCtx, shield?: 
       break;
     case "perception":
       status("Estupefacto", cond.stupefied);
+      status("Cegado", cond.blinded ? 4 : 0);
       break;
     case "skill":
       if (ctx.key === "athletics") status("Débil", cond.enfeebled);
@@ -355,11 +447,17 @@ export const hiddenFrom = (c: Conditions | undefined, observer: string) =>
   !!c && (!!c.invisible || (!!c.hidden && (!c.hidFrom || c.hidFrom.includes(observer))));
 
 // Prueba plana para elegir de objetivo a alguien (o lanzarle algo de un solo objetivo):
-// 11 si está escondido del atacante, 5 si está oculto, 0 si no hace falta
-export function targetFlatDc(target: Conditions | undefined, attacker: string): number {
-  if (hiddenFrom(target, attacker)) return 11;
-  return target?.concealed ? 5 : 0;
+// 11 si está escondido del atacante (o el atacante está cegado), 5 si está oculto (o el
+// atacante está encandilado), 0 si no hace falta
+export function targetFlatDc(target: Conditions | undefined, attacker: string, attackerCond?: Conditions): number {
+  if (attackerCond?.blinded || hiddenFrom(target, attacker)) return 11;
+  return target?.concealed || attackerCond?.dazzled ? 5 : 0;
 }
+
+// ¿El objetivo no ve al atacante? (está escondido de él o el objetivo está cegado): lo
+// encuentra desprevenido
+export const unseenBy = (attacker: Conditions | undefined, target: Conditions | undefined, targetKey: string) =>
+  hiddenFrom(attacker, targetKey) || !!target?.blinded;
 
 export const FLAT_LABEL: Record<number, string> = { 11: "Escondido", 5: "Oculto" };
 

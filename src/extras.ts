@@ -136,6 +136,16 @@ export interface HealPrefs {
   // Botiquín de sanador puesto a mano: en general o solo para algunas actividades
   kit?: boolean;
   kitFor?: string[];
+  // Habilidades curativas agregadas a mano (rasgo, dote, objeto…)
+  abilities?: HealAbility[];
+}
+
+// Habilidad que cura: cantidad fija o en dados; sin cantidad se escribe al usarla
+export interface HealAbility {
+  id: string;
+  n: string;
+  f?: string;
+  note?: string;
 }
 
 // Conjuro agregado a mano (innato de un objeto, de una dote…): rango, usos por día y de qué
@@ -161,6 +171,8 @@ export interface Extras {
   names?: Record<string, string>;
   // Cantidades del inventario y de las recetas
   qty?: Record<string, number>;
+  // De la cantidad de cada receta, cuántos se hicieron con Alquimia rápida (el resto, avanzada)
+  qmade?: Record<string, number>;
   invested?: Record<string, boolean>;
   added?: AddedEntry[];
   // Objetos de la hoja que ya no están (pergaminos usados): no se muestran

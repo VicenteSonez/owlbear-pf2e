@@ -161,6 +161,15 @@ export async function startOfTurn(e: Entry, who: Roller, publish: Publish) {
       await patchNpc(t.tokenId, (n) => ({ ...n, hp: Math.min(n.maxHp, n.hp + fh) }));
     }
   }
+  // La sanación rápida con duración (tónico calmante) baja una ronda y al llegar a 0 se acaba
+  if (t.state.cond.fhR) {
+    const tick = (c: Conditions): Conditions => {
+      const left = (c.fastHealing ?? 0) > 0 ? (c.fhR ?? 0) - 1 : 0;
+      return left > 0 ? { ...c, fhR: left } : { ...c, fhR: undefined, fastHealing: undefined };
+    };
+    if (t.kind === "pc") await live.patch(t.state.id, (s) => ({ ...s, cond: tick(s.cond) }));
+    else await patchNpc(t.tokenId, (n) => ({ ...n, cond: tick(n.cond) }));
+  }
   if (t.kind !== "pc") {
     // Enfriamientos de sus poderes (Aliento de dragón…): baja una ronda al empezar su turno
     if (tickCooldowns(t.state)) await patchNpc(t.tokenId, (n) => tickCooldowns(n) ?? n);

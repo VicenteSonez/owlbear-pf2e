@@ -49,6 +49,15 @@ export interface Weapon {
   // Rasgos de crítico: dado de Letal (deadly) y de Fatal (fatal), en caras
   deadly?: number;
   fatal?: number;
+  // Dos manos (cuerpo a cuerpo): dado del arma sostenida a dos manos. Puntería fatal (a distancia):
+  // dado de Fatal que gana a dos manos. grip2 = la sostiene a dos manos ahora.
+  twoHand?: number;
+  fatalAim?: number;
+  grip2?: boolean;
+  // Apuñalador: +1 de precisión contra desprevenidos (+2 si es un arma +3)
+  backstabber?: boolean;
+  // Runa de potencia (+1, +2, +3)
+  pot?: number;
   // Arma cuerpo a cuerpo que también se puede arrojar (daga, lanza…): incremento en pies
   throwRange?: number;
   // Daño de salpicadura (bombas): valor o dado, tipo y alcance en pies (5 si no se dice);
@@ -131,7 +140,7 @@ export interface Pet {
 }
 
 // Sube este número cuando el lector cambie: las hojas guardadas se vuelven a leer solas
-export const PARSER_VERSION = 6;
+export const PARSER_VERSION = 7;
 
 export interface Character {
   parserVersion?: number;
@@ -241,6 +250,12 @@ const FATAL_WEAPONS: [string, number][] = [
   ["greatpick", 12], ["light pick", 8], ["pick", 10], ["arquebus", 12], ["dueling pistol", 10],
   ["flintlock pistol", 8], ["flintlock musket", 10],
 ];
+// Rasgos que dependen del agarre: Dos manos (cuerpo a cuerpo) y Puntería fatal (a distancia)
+const TWO_HAND_WEAPONS: [string, number][] = [
+  ["bastard sword", 12], ["dwarven waraxe", 12], ["gnome hooked hammer", 10], ["katana", 10], ["khakkara", 10],
+];
+const FATAL_AIM_WEAPONS: [string, number][] = [["jezail", 12]];
+const BACKSTABBER_WEAPONS = ["dogslicer", "filcher's fork", "arbalest", "khopesh"];
 
 // Armas cuerpo a cuerpo con el rasgo Arrojadiza y su incremento de alcance
 const THROWN_MELEE: [string, number][] = [
@@ -383,6 +398,11 @@ export function parsePathbuilder(raw: unknown): Character {
     return {
       deadly: DEADLY_WEAPONS.find(([n]) => baseName.includes(n))?.[1],
       fatal: FATAL_WEAPONS.find(([n]) => baseName.includes(n))?.[1],
+      // El bastón (staff) es Dos manos d8; el bo staff ya es a dos manos
+      twoHand: !ranged ? (TWO_HAND_WEAPONS.find(([n]) => baseName.includes(n))?.[1] ?? (wordIn(baseName, "staff") && !/bo staff/.test(baseName) ? 8 : undefined)) : undefined,
+      fatalAim: ranged ? FATAL_AIM_WEAPONS.find(([n]) => baseName.includes(n))?.[1] : undefined,
+      backstabber: BACKSTABBER_WEAPONS.some((n) => baseName.includes(n)) || undefined,
+      pot: num(w.pot) || undefined,
       throwRange: throwMelee?.[1],
       name: display,
       key: baseName || display.toLowerCase(),
