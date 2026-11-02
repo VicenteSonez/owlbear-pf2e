@@ -2,9 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import OBR from "@owlbear-rodeo/sdk";
 import { fmtMod, parsePathbuilder, type Character } from "../pathbuilder";
 import { Dice3D, evaluate, parseFormula, randomValues, type DiceStyle, type Formula } from "../dice";
-import { autoLinkCandidate, inOwlbear, linkToken, publishPlayer, renameToken, unlinkToken } from "../obr";
+import { autoLinkCandidate, inOwlbear, linkToken, publishPlayer, renameToken, tokenData, unlinkToken } from "../obr";
 import { store } from "../storage";
-import { live, needsSheetSync, seedState, syncSheet, useLiveStates, type PcState } from "../live";
+import { canClaim, live, needsSheetSync, seedState, syncSheet, useLiveStates, type PcState } from "../live";
 import { DEGREE_LABEL, applyRecovery, degreeOf, recoveryDc, type Degree } from "../rules";
 import { CHANNEL_FX, newId, npcState, type NpcState, type RollEntry } from "../shared";
 import { ActionsContext, type Actions, type NoteRequest, type RollResult } from "./ctx";
@@ -185,6 +185,32 @@ export function App() {
       if (needsSheetSync(s, c) || s.ownerName !== ownerName) live.patch(c.id, (x) => ({ ...syncSheet(x, c), ownerName }));
     }
   }, [liveReady, session.ready, characters, activeId, states, session.me.id, session.me.name]);
+
+  // El jugador que tiene la hoja activa en su navegador se queda con ella (si la subió antes el GM, por ejemplo)
+  const claiming = useRef(false);
+  const ownState = own ? states[own.id] : undefined;
+  useEffect(() => {
+    if (!inOwlbear || !session.ready || isGm || !own || !ownState) return;
+    if (ownState.owner === session.me.id || claiming.current) return;
+    claiming.current = true;
+    OBR.party
+      .getPlayers()
+      .then((others) => {
+        const cur = live.get(own.id);
+        if (cur && canClaim(cur, session.me.id, others)) return live.claim(own.id, { id: session.me.id, name: session.me.name });
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        claiming.current = false;
+      });
+  }, [session.ready, isGm, own, ownState, session.me.id, session.me.name]);
+
+  // El token sigue al dueño de la hoja: el menú "HP / CA" del jugador lo busca por este id
+  useEffect(() => {
+    if (!inOwlbear || isGm || !token || !character || !ownsCharacter) return;
+    if (state?.owner !== session.me.id || tokenData(token)?.ownerId === session.me.id) return;
+    linkToken(token.id, character, session.me.id).catch(() => undefined);
+  }, [isGm, token, character, ownsCharacter, state?.owner, session.me.id]);
 
   // Publica la hoja propia (y sus anotaciones) para que el GM pueda abrirla
   useEffect(() => {

@@ -134,6 +134,12 @@ export function syncSheet(s: PcState, c: Character): PcState {
   return next;
 }
 
+// El dueño guardado puede no ser quien juega la hoja: el GM la subió primero o el jugador volvió
+// con otro id de Owlbear. Solo se respeta si es otro jugador conectado (hojas iguales comparten estado).
+export function canClaim(s: PcState, meId: string, others: { id: string; role: string }[]) {
+  return s.owner !== meId && !others.some((p) => p.id === s.owner && p.role === "PLAYER");
+}
+
 type Listener = (states: Record<string, PcState>) => void;
 
 class LiveStore {
@@ -266,6 +272,13 @@ class LiveStore {
     const cur = this.states[id];
     if (!cur) return;
     await this.write(fn(cur));
+  }
+
+  // Pasa la hoja y sus mascotas a un nuevo dueño
+  async claim(id: string, owner: { id: string; name: string }) {
+    for (const s of Object.values(this.states)) {
+      if (s.id === id || s.pet?.parent === id) await this.patch(s.id, (x) => ({ ...x, owner: owner.id, ownerName: owner.name }));
+    }
   }
 
   async remove(id: string) {
