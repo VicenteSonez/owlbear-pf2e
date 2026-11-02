@@ -27,8 +27,9 @@ export interface DamageReq {
   // Daño persistente que deja el golpe (con crítico se duplica, salvo el de solo crítico)
   pers?: PersistentSpec[];
   // Partes del daño por tipo (arma, espíritu, fuego de una runa…): cada una con sus
-  // resistencias. La suma es amt.
-  parts?: { amt: number; ty: string }[];
+  // resistencias. La suma es amt. prec = daño de precisión (del tipo del arma, se junta con
+  // esa parte, y además le cuenta lo que haya contra la precisión).
+  parts?: { amt: number; ty: string; prec?: boolean }[];
   // Material o runa del arma (plata, toque fantasmal…) para debilidades y excepciones
   tags?: string[];
   // Daño de salpicadura a un objetivo cercano (no al principal)

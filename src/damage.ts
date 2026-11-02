@@ -142,27 +142,40 @@ export async function dealDamage(t: TargetRef, amount: number, o: DamageOpts = {
 export interface DamagePart {
   amt: number;
   ty: string;
+  // De amt, cuánto es daño de precisión
+  prec?: number;
 }
 
 export const NO_IWR: IwrPick = { imm: false, res: [], weak: [] };
 
-// Junta las partes del mismo tipo: la salpicadura se suma al daño base antes de las resistencias
-export function mergeParts(parts: DamagePart[]): DamagePart[] {
+// Junta las partes del mismo tipo: la salpicadura se suma al daño base antes de las resistencias.
+// La precisión se suma a la parte de su tipo (la del arma) y queda anotada en prec.
+export function mergeParts(parts: { amt: number; ty: string; prec?: boolean }[]): DamagePart[] {
   const out: DamagePart[] = [];
-  for (const p of parts) {
+  for (const { prec, ...p } of parts) {
     const same = out.find((x) => normType(x.ty) === normType(p.ty));
-    if (same) same.amt += p.amt;
-    else out.push({ ...p });
+    const part = same ?? { ...p, amt: 0 };
+    part.amt += p.amt;
+    if (prec) part.prec = (part.prec ?? 0) + p.amt;
+    if (!same) out.push(part);
   }
   return out;
 }
 
-// Daño final de varias partes, cada una con sus resistencias (contra "todo" se aplica a cada tipo)
-export function finalParts(parts: DamagePart[], iwr: Iwr | undefined, picks: IwrPick[]): DamageResult {
+// Daño final de varias partes, cada una con sus resistencias (contra "todo" se aplica a cada tipo).
+// La porción de precisión pasa antes por lo que haya contra la precisión (precPicks).
+export function finalParts(parts: DamagePart[], iwr: Iwr | undefined, picks: IwrPick[], precPicks: (IwrPick | undefined)[] = []): DamageResult {
   let total = 0;
   const notes: string[] = [];
   parts.forEach((p, i) => {
-    const r = resolveIwr(p.amt, iwr, picks[i] ?? NO_IWR);
+    const prec = Math.min(p.prec ?? 0, p.amt);
+    let amt = p.amt;
+    if (prec > 0 && precPicks[i]) {
+      const pr = resolveIwr(prec, iwr, precPicks[i]!);
+      amt = p.amt - prec + pr.total;
+      if (pr.notes) notes.push(`precisión: ${pr.notes}`);
+    }
+    const r = resolveIwr(amt, iwr, picks[i] ?? NO_IWR);
     total += r.total;
     if (r.notes) notes.push(parts.length > 1 ? `${p.ty || "sin tipo"}: ${r.notes}` : r.notes);
   });

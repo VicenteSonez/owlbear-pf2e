@@ -10,6 +10,8 @@ export interface Mod {
   label: string;
   type: BonusType;
   value: number;
+  // Daño de precisión: se apila como los demás, pero va aparte para las resistencias
+  prec?: boolean;
 }
 
 export const BONUS_LABEL: Record<BonusType, string> = {
@@ -575,6 +577,23 @@ export function autoIwr(iwr: Iwr | undefined, type: string, o: DamageTags = {}):
     weak: (iwr?.weak ?? []).flatMap((w, i) => (!w.off && entryApplies(w, type, o) ? [i] : [])),
   };
 }
+
+export const isPrecision = (t?: string) => !!t && normType(t) === "precision";
+
+// El daño de precisión es del tipo del arma (le cuentan sus resistencias y debilidades) y,
+// además, a esa porción se le aplica lo que sea contra "precisión". Lo de "todo" no: ya
+// cuenta en la parte del arma.
+export function precisionIwr(iwr: Iwr | undefined, o: DamageTags = {}): IwrPick {
+  const only = (e: IwrEntry) => !e.off && isPrecision(e.t) && entryApplies(e, "precisión", o);
+  return {
+    imm: (iwr?.imm ?? []).some(isPrecision),
+    res: (iwr?.res ?? []).flatMap((r, i) => (only(r) ? [i] : [])),
+    weak: (iwr?.weak ?? []).flatMap((w, i) => (only(w) ? [i] : [])),
+  };
+}
+
+export const hasPrecisionIwr = (iwr?: Iwr) =>
+  !!(iwr?.imm?.some(isPrecision) || iwr?.res?.some((e) => isPrecision(e.t)) || iwr?.weak?.some((e) => isPrecision(e.t)));
 
 // Los vivos son inmunes al daño de vitalidad y los muertos vivientes al de vacío
 export function lifeIwr(iwr: Iwr | undefined, undead: boolean | undefined): Iwr {

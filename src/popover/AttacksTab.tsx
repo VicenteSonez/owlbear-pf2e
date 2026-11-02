@@ -428,7 +428,7 @@ export function AttacksTab({ character: c, state, canEdit, extras, canEditExtras
       setOpts((p) => ({ ...p, finisher: false }));
     }
     if (opts.preyFirst) setOpts((p) => ({ ...p, preyFirst: false }));
-    const parts = [{ amt: r.parts?.[0] ?? r.total, ty: w.damageType }, ...d.groups.map((g, i) => ({ amt: r.parts?.[i + 1] ?? 0, ty: g.ty }))];
+    const parts = [{ amt: r.parts?.[0] ?? r.total, ty: w.damageType }, ...d.groups.map((g, i) => ({ amt: r.parts?.[i + 1] ?? 0, ty: g.ty, prec: g.prec }))];
     const splashIdx = d.groups.findIndex((g) => g.splash);
     const splashAmt = splashIdx >= 0 ? (r.parts?.[splashIdx + 1] ?? 0) : 0;
     if (target) {
@@ -471,6 +471,13 @@ export function AttacksTab({ character: c, state, canEdit, extras, canEditExtras
     { key: "finisher", label: "Golpe de gracia", title: "Requiere Panache; lo gasta al tirar el daño", show: f.precise && !!cls?.panache },
     { key: "stratagem", label: `Estratagema (${cls?.strat?.v ?? "—"})`, title: "Ataque con Inteligencia usando el d20 guardado, +daño de precisión", show: f.stratagem && !!cls?.strat },
     { key: "sneak", label: "Furtivo", title: "Fuerza el Ataque furtivo (si el objetivo no figura desprevenido)", show: f.sneak > 0 },
+    // Con Ataque furtivo, el botón Furtivo ya marca al objetivo como desprevenido
+    {
+      key: "offGuard",
+      label: "Desprevenido",
+      title: "El objetivo está desprevenido aunque no figure así (bonos de “solo si está desprevenido”)",
+      show: f.sneak === 0 && (extras.mods ?? []).some((m) => m.on && m.og),
+    },
   ];
 
   // Rasgos del arma en una línea (lo que se configura en ⚙)

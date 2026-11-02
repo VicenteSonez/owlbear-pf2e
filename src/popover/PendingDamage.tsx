@@ -2,7 +2,7 @@
 // Un golpe puede traer varias partes (arma, espíritu, fuego de una runa…): cada tipo con sus
 // resistencias y debilidades.
 import { useEffect, useState } from "react";
-import { addPersistent, autoIwr, type IwrPick } from "../rules";
+import { addPersistent, autoIwr, hasPrecisionIwr, precisionIwr, type IwrPick } from "../rules";
 import { newId } from "../shared";
 import { patchNpc } from "../obr";
 import { damageReqs, useDamageReqs, type DamageReq } from "../requests";
@@ -17,6 +17,9 @@ function ReqRow({ r }: { r: DamageReq }) {
   const [parts, setParts] = useState<DamagePart[]>(() => mergeParts(r.parts?.length ? r.parts : [{ amt: r.amt, ty: r.ty }]));
   const [amts, setAmts] = useState<string[]>(() => parts.map((p) => String(p.amt)));
   const [picks, setPicks] = useState<(IwrPick | null)[]>(() => parts.map(() => null));
+  // Precisión incluida en cada parte (cuenta como del arma y, aparte, contra la precisión)
+  const [precAmts, setPrecAmts] = useState<string[]>(() => parts.map((p) => String(p.prec ?? 0)));
+  const [precPicks, setPrecPicks] = useState<(IwrPick | null)[]>(() => parts.map(() => null));
   // Persistentes que se aplicarán (todos marcados al llegar)
   const [persOn, setPersOn] = useState<boolean[]>(() => (r.pers ?? []).map(() => true));
   useEffect(() => {
@@ -30,6 +33,8 @@ function ReqRow({ r }: { r: DamageReq }) {
     setParts(next);
     setAmts(next.map((p) => String(p.amt)));
     setPicks(next.map(() => null));
+    setPrecAmts(next.map((p) => String(p.prec ?? 0)));
+    setPrecPicks(next.map(() => null));
   }
 
   // Debilidad mortal: activa la mayor debilidad del objetivo aunque no coincida el tipo (en la parte del arma)
@@ -40,8 +45,10 @@ function ReqRow({ r }: { r: DamageReq }) {
     return i === 0 && r.mortal && mortalIdx >= 0 && !base.weak.includes(mortalIdx) ? { ...base, weak: [mortalIdx] } : base;
   };
   const cur = parts.map((_, i) => picks[i] ?? autoFor(i));
-  const values = parts.map((p, i) => ({ ...p, amt: parseInt(amts[i], 10) || 0 }));
-  const preview = finalParts(values, info?.iwr, cur);
+  const autoPrec = precisionIwr(info?.iwr, { tags: r.tags, crit: r.crit, noTagMatch: true });
+  const curPrec = parts.map((p, i) => (p.prec ? (precPicks[i] ?? autoPrec) : undefined));
+  const values = parts.map((p, i) => ({ ...p, amt: parseInt(amts[i], 10) || 0, prec: p.prec ? parseInt(precAmts[i], 10) || 0 : undefined }));
+  const preview = finalParts(values, info?.iwr, cur, curPrec);
 
   const apply = async () => {
     if (r.heal) {
@@ -49,7 +56,7 @@ function ReqRow({ r }: { r: DamageReq }) {
       await healTarget({ kind: "npc", tokenId: r.tok }, n);
       await notify({ label: `${r.n} recupera`, title: `${n} PG`, detail: r.label, tag: "Curación", charName: r.fromName, secret: info?.hidden });
     } else {
-      const res = finalParts(values, info?.iwr, cur);
+      const res = finalParts(values, info?.iwr, cur, curPrec);
       const out = await dealDamage({ kind: "npc", tokenId: r.tok }, res.total, { pick: NO_IWR });
       const pers = (r.pers ?? []).filter((_, i) => persOn[i]);
       if (pers.length) {
@@ -65,7 +72,7 @@ function ReqRow({ r }: { r: DamageReq }) {
         title: `${out.total} de daño`,
         detail: [
           r.label,
-          values.map((p) => `${p.amt} ${p.ty || "sin tipo"}`).join(" + "),
+          values.map((p) => `${p.amt} ${p.ty || "sin tipo"}${p.prec ? ` (${p.prec} de precisión)` : ""}`).join(" + "),
           res.notes,
           ...pers.map((p) => `+ ${p.f}${r.crit && !p.crit ? " ×2" : ""} persistente ${p.ty}`.trim()),
         ]
@@ -109,6 +116,24 @@ function ReqRow({ r }: { r: DamageReq }) {
           </div>
           {!r.heal && (
             <IwrChips iwr={info?.iwr} type={p.ty} pick={cur[i]} onPick={(pk) => setPicks((l) => l.map((x, j) => (j === i ? pk : x)))} />
+          )}
+          {!r.heal && !!p.prec && (
+            <div className="te-row" title="El daño de precisión es del tipo del arma (ya va sumado arriba); además le cuenta lo que tenga el objetivo contra la precisión">
+              <span className="muted small">de ello</span>
+              <input
+                className="te-amount"
+                inputMode="numeric"
+                value={precAmts[i]}
+                onChange={(e) => {
+                  const v = e.target.value.replace(/\D/g, "");
+                  setPrecAmts((l) => l.map((x, j) => (j === i ? v : x)));
+                }}
+              />
+              <span className="muted small">de precisión</span>
+            </div>
+          )}
+          {!r.heal && !!p.prec && hasPrecisionIwr(info?.iwr) && curPrec[i] && (
+            <IwrChips iwr={info?.iwr} type="precisión" pick={curPrec[i]!} onPick={(pk) => setPrecPicks((l) => l.map((x, j) => (j === i ? pk : x)))} />
           )}
         </div>
       ))}

@@ -28,6 +28,7 @@ export function ModsEditor({ mods, canEdit, onChange }: { mods: CustomMod[]; can
   const [critOnly, setCritOnly] = useState(false);
   const [perDie, setPerDie] = useState(false);
   const [splash, setSplash] = useState(false);
+  const [ogOnly, setOgOnly] = useState(false);
   const [error, setError] = useState("");
   const active = mods.filter((m) => m.on);
   const set = onChange;
@@ -55,6 +56,7 @@ export function ModsEditor({ mods, canEdit, onChange }: { mods: CustomMod[]; can
                 {m.dt ? ` · ${m.dt}` : ""}
                 {m.perDie ? " · por dado" : ""}
                 {m.critOnly ? " · solo crítico" : ""}
+                {m.og ? " · solo si está desprevenido" : ""}
               </span>
               {canEdit && (
                 <button className="row-x" title="Quitar" onClick={() => set((l) => l.filter((x) => x.id !== m.id))}>
@@ -76,6 +78,7 @@ export function ModsEditor({ mods, canEdit, onChange }: { mods: CustomMod[]; can
                   critOnly: (dmg && critOnly) || undefined,
                   perDie: (dmg && perDie) || undefined,
                   splash: (dmg && splash && !pers) || undefined,
+                  og: ogOnly || undefined,
                 };
                 // Al daño se puede escribir un dado (1d4) con su tipo
                 if (dmg && isDice(raw)) {
@@ -100,6 +103,7 @@ export function ModsEditor({ mods, canEdit, onChange }: { mods: CustomMod[]; can
                 setCritOnly(false);
                 setPerDie(false);
                 setSplash(false);
+                setOgOnly(false);
               }}
             >
               <input placeholder="Nombre (Bendecir…)" value={label} onChange={(e) => setLabel(e.target.value)} />
@@ -132,13 +136,18 @@ export function ModsEditor({ mods, canEdit, onChange }: { mods: CustomMod[]; can
                   <DamageTypeList />
                 </>
               )}
+              <label className="te-check" title="Solo cuenta si el objetivo está desprevenido (condición, flanqueo, no te ve o el botón Desprevenido/Furtivo de Ataques)">
+                <input type="checkbox" checked={ogOnly} onChange={(e) => setOgOnly(e.target.checked)} /> Solo si está desprevenido
+              </label>
               <button className="btn">+</button>
             </form>
           )}
           {error && <p className="error small">{error}</p>}
           <p className="muted small">
             Del mismo tipo solo cuenta el mayor bono y el peor penalizador; los sin tipo se suman. Al daño también puedes poner dados (1d4) con su tipo, daño
-            persistente o de salpicadura, y que sea por cada dado del arma. Lo de “solo crítico” no se multiplica.
+            persistente o de salpicadura, y que sea por cada dado del arma. Lo de “solo crítico” no se multiplica. El daño de tipo “precisión” (p. ej. 1d6+1)
+            cuenta como del tipo del arma para resistencias y debilidades, y además le cuenta lo que el objetivo tenga contra la precisión; se suma a
+            otros daños de precisión (Ataque furtivo…), salvo los bonos con tipo (estado, circunstancial…), de los que solo cuenta el mayor.
           </p>
         </div>
       )}

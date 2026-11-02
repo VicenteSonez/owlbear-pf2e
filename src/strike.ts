@@ -5,7 +5,7 @@ import type { PcState } from "./live";
 import type { CustomMod, CustomWeapon, Extras } from "./extras";
 import type { PersistentSpec } from "./shared";
 import { parseFormula } from "./dice";
-import { GHOST_TOUCH, conditionMods, modsText, normType, stackMods, type Conditions, type Mod } from "./rules";
+import { GHOST_TOUCH, conditionMods, isPrecision, modsText, normType, stackMods, type Conditions, type Mod } from "./rules";
 import {
   antithesisBonus,
   guessSlinger,
@@ -46,6 +46,8 @@ export interface StrikeOpts {
   crit?: boolean;
   // Arrojar un arma cuerpo a cuerpo (daga, lanza…): ataque a distancia con Destreza
   thrown?: boolean;
+  // Objetivo desprevenido marcado a mano (bonos de "solo si está desprevenido")
+  offGuard?: boolean;
 }
 
 export interface StrikeContext {
@@ -81,12 +83,21 @@ function modDice(m: CustomMod, w: Weapon): string {
   return m.dice.replace(/^(\d*)d/i, (_, c: string) => `${(parseInt(c || "1", 10) || 1) * n}d`);
 }
 
-const customMods = (x: Extras, w: Weapon, to: "atk" | "dmg", crit = false): Mod[] =>
-  (x.mods ?? [])
-    .filter((m) => m.on && m.to === to && m.value && !m.dice && !m.pers && !m.splash && (!m.critOnly || crit))
-    // Los de "solo crítico" no se multiplican: van aparte (critOnlyFlat)
-    .filter((m) => !m.critOnly)
-    .map((m) => ({ label: m.label || "Ajuste", type: m.type, value: modAmount(m, w) }));
+// ¿El objetivo está desprevenido ante este ataque? (condición, flanqueo, atacante escondido o marcado a mano)
+export function offGuardVs(o: StrikeOpts): boolean {
+  if (o.offGuard || o.sneak) return true;
+  const t = o.target;
+  return !!t && (!!t.cond.offGuard || !!t.og || (t.cond.buffs ?? []).some((b) => (b.ac ?? 0) < 0 && /desprevenido/i.test(b.n)));
+}
+
+// Bonos del jugador activos ahora (los de "solo desprevenido" piden que el objetivo lo esté)
+const activeMods = (x: Extras, to: "atk" | "dmg", og: boolean): CustomMod[] => (x.mods ?? []).filter((m) => m.on && m.to === to && (!m.og || og));
+
+// Los de "solo crítico" no se multiplican: van aparte, con los dados
+const customMods = (x: Extras, w: Weapon, to: "atk" | "dmg", og: boolean): Mod[] =>
+  activeMods(x, to, og)
+    .filter((m) => m.value && !m.dice && !m.pers && !m.splash && !m.critOnly)
+    .map((m) => ({ label: m.label || "Ajuste", type: m.type, value: modAmount(m, w), prec: (to === "dmg" && isPrecision(m.dt)) || undefined }));
 
 // Arma agregada a mano → arma de la hoja
 export function customWeapon(w: CustomWeapon): Weapon {
@@ -154,7 +165,7 @@ export function strikeAttack(w: Weapon, ctx: StrikeContext, o: StrikeOpts, mapIn
   const melee = !w.ranged && !thrown;
   const mods = [
     ...conditionMods(s?.cond, { kind: "attack", melee, finesse: w.finesse || thrown, target: o.target?.key }),
-    ...customMods(x, w, "atk"),
+    ...customMods(x, w, "atk", offGuardVs(o)),
   ];
   const { total, applied } = stackMods(mods);
   const value = base + total - mapStep(w, ctx, o) * mapIndex;
@@ -169,6 +180,8 @@ export interface DamageGroup {
   label: string;
   mult: boolean;
   splash?: boolean;
+  // Daño de precisión: es del tipo del arma, pero va aparte por si el objetivo resiste la precisión
+  prec?: boolean;
 }
 
 export interface StrikeDamage {
@@ -197,9 +210,11 @@ export function strikeDamage(w: Weapon, ctx: StrikeContext, o: StrikeOpts): Stri
   const wType = w.damageType || "";
   // Las arrojadizas suman Fuerza al daño: Débil las penaliza (las de salpicadura, como las bombas, no)
   const str = (!!w.thrown || thrown) && !w.bomb && !w.splash;
-  const mods: Mod[] = [...conditionMods(s?.cond, { kind: "damage", melee, str }), ...customMods(x, w, "dmg", crit)];
-  // Dados que se suman a la fórmula: con su tipo y si se duplican con crítico
-  const dice: { f: string; label: string; ty?: string; mult: boolean }[] = [];
+  const og = offGuardVs(o);
+  const mods: Mod[] = [...conditionMods(s?.cond, { kind: "damage", melee, str }), ...customMods(x, w, "dmg", og)];
+  // Dados que se suman a la fórmula: con su tipo y si se duplican con crítico. Los de precisión
+  // (prec) son del tipo del arma pero se tiran aparte, por si el objetivo resiste la precisión.
+  const dice: { f: string; label: string; ty?: string; mult: boolean; prec?: boolean }[] = [];
   const splash: { f: string; ty: string; label: string }[] = [];
   const typeNotes: string[] = [];
 
@@ -223,32 +238,32 @@ export function strikeDamage(w: Weapon, ctx: StrikeContext, o: StrikeOpts): Stri
   for (const e of w.extra) {
     if (!e.active) continue;
     if (precisionAuto && /precision/i.test(e.type)) continue;
-    dice.push({ f: `${e.dice}d${e.sides}`, label: e.type || "extra", ty: /precision/i.test(e.type) ? undefined : e.type, mult: true });
+    const prec = isPrecision(e.type);
+    dice.push({ f: `${e.dice}d${e.sides}`, label: e.type || "extra", ty: prec ? undefined : e.type, mult: true, prec: prec || undefined });
   }
   // Bonos del jugador al daño: dados (+1d4 de fuego…), los de solo crítico (no se multiplican) y salpicadura
-  for (const m of x.mods ?? []) {
-    if (!m.on || m.to !== "dmg" || m.pers) continue;
+  for (const m of activeMods(x, "dmg", og)) {
+    if (m.pers) continue;
     if (m.critOnly && !crit) continue;
     const amount = m.dice ? modDice(m, w) : m.value ? String(modAmount(m, w)) : "";
     if (!amount) continue;
     const label = `${m.label || "Extra"}${m.dt ? ` (${m.dt})` : ""}`;
-    if (m.splash) splash.push({ f: amount, ty: m.dt ?? "", label });
-    else if (m.dice || m.critOnly) dice.push({ f: amount, label, ty: m.dt, mult: !m.critOnly });
+    const prec = isPrecision(m.dt);
+    if (m.splash) splash.push({ f: amount, ty: prec ? "" : (m.dt ?? ""), label });
+    else if (m.dice || m.critOnly) dice.push({ f: amount, label, ty: prec ? undefined : m.dt, mult: !m.critOnly, prec: prec || undefined });
   }
-  if (f.edge === "precision" && o.preyFirst && isPrey(ctx, o)) dice.push({ f: `${rangerPrecisionDice(level)}d8`, label: "Precisión (presa)", mult: true });
+  if (f.edge === "precision" && o.preyFirst && isPrey(ctx, o)) dice.push({ f: `${rangerPrecisionDice(level)}d8`, label: "Precisión (presa)", mult: true, prec: true });
   const sk = ctx.slinger ?? guessSlinger(w);
   const sling = f.slinger ? slingerDamage(sk, f.slingerLegend) : null;
-  if (sling && w.ranged) dice.push({ f: sling, label: "Precisión del pistolero", mult: true });
-  const targetOffGuard =
-    !!o.target && (o.target.cond.offGuard || !!o.target.og || (o.target.cond.buffs ?? []).some((b) => (b.ac ?? 0) < 0 && /desprevenido/i.test(b.n)));
+  if (sling && w.ranged) dice.push({ f: sling, label: "Precisión del pistolero", mult: true, prec: true });
   const sneakWeapon = w.ranged || thrown || w.agile || w.finesse || (f.ruffian && !!o.sneak);
-  if (f.sneak > 0 && sneakWeapon && (targetOffGuard || o.sneak)) dice.push({ f: `${f.sneak}d6`, label: "Ataque furtivo", mult: true });
+  if (f.sneak > 0 && sneakWeapon && og) dice.push({ f: `${f.sneak}d6`, label: "Ataque furtivo", mult: true, prec: true });
   if (f.precise && (w.agile || w.finesse)) {
     const ps = preciseStrike(level);
-    if (o.finisher && cls?.panache) dice.push({ f: `${ps.dice}d6`, label: "Golpe de gracia", mult: true });
-    else mods.push({ label: "Golpe preciso", type: "untyped", value: ps.flat });
+    if (o.finisher && cls?.panache) dice.push({ f: `${ps.dice}d6`, label: "Golpe de gracia", mult: true, prec: true });
+    else mods.push({ label: "Golpe preciso", type: "untyped", value: ps.flat, prec: true });
   }
-  if (o.stratagem && cls?.strat && f.stratagem) dice.push({ f: `${strategicStrikeDice(level)}d6`, label: "Golpe estratégico", mult: true });
+  if (o.stratagem && cls?.strat && f.stratagem) dice.push({ f: `${strategicStrikeDice(level)}d6`, label: "Golpe estratégico", mult: true, prec: true });
 
   // Runas escritas a mano: daño extra normal, persistente o de salpicadura
   const pers: PersistentSpec[] = [];
@@ -267,7 +282,7 @@ export function strikeDamage(w: Weapon, ctx: StrikeContext, o: StrikeOpts): Stri
   if (ik?.dmg) {
     const d = ik.dmg;
     const half = !!o.target?.maxHp && (o.target.hp ?? 0) < o.target.maxHp / 2;
-    const per = d.vsHalf && half ? d.vsHalf : d.vsOffGuard && targetOffGuard ? d.vsOffGuard : d.per;
+    const per = d.vsHalf && half ? d.vsHalf : d.vsOffGuard && og ? d.vsOffGuard : d.per;
     const amount = per * nDice;
     if (d.splash) splash.push({ f: String(amount), ty: "espíritu", label: ik.n });
     else if (d.pers) pers.push({ f: String(amount), ty: "espíritu" });
@@ -286,12 +301,14 @@ export function strikeDamage(w: Weapon, ctx: StrikeContext, o: StrikeOpts): Stri
   // Salpicadura del arma
   if (w.splash?.f.trim()) splash.unshift({ f: w.splash.f, ty: w.splash.ty || wType, label: "Salpicadura" });
 
+  // Los planos de precisión se apilan con el resto (los de tipo, solo el mayor) y luego van aparte
   const { total, applied } = stackMods(mods);
-  const flat = (w.damageBonus ?? 0) + total;
+  const precFlat = Math.max(0, applied.filter((m) => m.prec).reduce((sum, m) => sum + m.value, 0));
+  const flat = (w.damageBonus ?? 0) + total - precFlat;
   // Lo del mismo tipo que el arma (o sin tipo) va en la fórmula principal; el resto, aparte por tipo
   const same = (ty?: string) => !ty?.trim() || normType(ty) === normType(wType);
   const join = (list: string[]) => list.map((d) => (d.startsWith("-") ? d : `+${d}`)).join("").replace(/^\+/, "");
-  const mainDice = dice.filter((d) => d.mult && same(d.ty)).map((d) => d.f);
+  const mainDice = dice.filter((d) => d.mult && !d.prec && same(d.ty)).map((d) => d.f);
   const formula = `${baseDice}${flat ? fmtMod(flat) : ""}${mainDice.length ? `+${join(mainDice)}` : ""}`;
   const groups: DamageGroup[] = [];
   const pushGroup = (list: typeof dice, mult: boolean) => {
@@ -306,8 +323,17 @@ export function strikeDamage(w: Weapon, ctx: StrikeContext, o: StrikeOpts): Stri
     }
     for (const g of byType.values()) groups.push({ f: join(g.fs), ty: g.ty, label: g.labels.join(", "), mult });
   };
-  pushGroup(dice.filter((d) => d.mult && !same(d.ty)), true);
-  pushGroup(dice.filter((d) => !d.mult), false);
+  pushGroup(dice.filter((d) => d.mult && !d.prec && !same(d.ty)), true);
+  pushGroup(dice.filter((d) => !d.mult && !d.prec), false);
+  // Precisión: del tipo del arma, en su propio grupo (el que se duplica y el de solo crítico)
+  const precDice = dice.filter((d) => d.prec && d.mult).map((d) => d.f);
+  if (precFlat) precDice.push(String(precFlat));
+  if (precDice.length) {
+    const labels = [...dice.filter((d) => d.prec && d.mult).map((d) => d.label), ...applied.filter((m) => m.prec).map((m) => m.label)];
+    groups.push({ f: join(precDice), ty: wType, label: labels.join(", "), mult: true, prec: true });
+  }
+  const precCrit = dice.filter((d) => d.prec && !d.mult);
+  if (precCrit.length) groups.push({ f: join(precCrit.map((d) => d.f)), ty: wType, label: precCrit.map((d) => d.label).join(", "), mult: false, prec: true });
   // Toda la salpicadura en un grupo (se tira una vez y se aplica a todos los salpicados)
   const splashTy = splash[0]?.ty || wType;
   const splashF = join(splash.map((x) => x.f));
