@@ -24,6 +24,8 @@ import type { RollFx } from "../fx";
 import { CombatView } from "./CombatView";
 import { InitPanel, initFormula, type InitOption } from "./Initiative";
 import { useCombatActions } from "./useCombatActions";
+import { scoutBonus } from "../explore";
+import { ExploreView } from "./ExploreView";
 import { extrasStore, useExtrasVersion, type Extras } from "../extras";
 import { SideRail, sidesFor, type Side } from "./side/SideRail";
 import { FeatsPanel } from "./side/FeatsPanel";
@@ -96,7 +98,7 @@ interface Overlay {
 const OVERLAY_MS = 1700;
 const OVERLAY_NAT_MS = 2900;
 
-type View = "sheet" | "gm" | "combat" | "import" | "gm-import";
+type View = "sheet" | "gm" | "combat" | "explore" | "import" | "gm-import";
 
 const degreeClass = (d?: Degree) => (d ? (d.includes("success") ? "ok" : "fail") : "");
 
@@ -503,7 +505,7 @@ export function App() {
   // Tira iniciativa y la guarda en el estado del PJ para la lista de combate
   const rollInit = useCallback(
     async (c: Character, opt: InitOption, winsTies: boolean) => {
-      const f = initFormula(opt, live.get(c.id));
+      const f = initFormula(opt, live.get(c.id), scoutBonus(live.all()));
       const r = await roll(
         { label: `Iniciativa (${opt.label})`, formula: f.formula, kind: "check", notes: f.notes, charName: c.name },
         { quick: view !== "sheet" },
@@ -548,6 +550,9 @@ export function App() {
           onClick={() => setView("combat")}
         >
           ⚔ Combate{combat.active && combat.round ? ` · R${combat.round}` : ""}
+        </button>
+        <button className={view === "explore" ? "on" : ""} title="Actividades de exploración" onClick={() => setView("explore")}>
+          🧭 Exploración
         </button>
         <button className={`icon ${view === "import" ? "on" : ""}`} title="Personajes / importar" onClick={() => setView("import")}>
           ⚙
@@ -594,6 +599,10 @@ export function App() {
           actions={actions}
           onRollInit={(opt, winsTies) => own && rollInit(own, opt, winsTies)}
         />
+      )}
+
+      {view === "explore" && (
+        <ExploreView states={states} sheets={sheets} own={own} combatActive={combat.active} onAvoidNotice={actions.applyAvoidNotice} />
       )}
 
       <div className={view === "sheet" && character ? "sheet" : "sheet hidden"}>
@@ -664,13 +673,6 @@ export function App() {
                   </button>
                 ))}
                 <button
-                  className={`btn dice init ${menu === "init" ? "on" : ""}`}
-                  title="Tirar iniciativa"
-                  onClick={() => setMenu((m) => (m === "init" ? null : "init"))}
-                >
-                  ⚔
-                </button>
-                <button
                   className={`btn dice flat ${menu === "flat" ? "on" : ""}`}
                   title="Tiradas planas: CD 11, CD 5, recuperación…"
                   onClick={() => setMenu((m) => (m === "flat" ? null : "flat"))}
@@ -685,6 +687,22 @@ export function App() {
                   <span className="palette-dot" style={{ background: diceStyle.color }} />
                 </button>
               </div>
+              {character && (
+                <button
+                  className={`btn init-big ${menu === "init" ? "on" : ""} ${combat.active && !state?.init ? "pending" : ""}`}
+                  title="Tirar iniciativa"
+                  onClick={() => setMenu((m) => (m === "init" ? null : "init"))}
+                >
+                  <span>⚔ Iniciativa</span>
+                  {state?.init ? (
+                    <small>
+                      Actual <b>{state.init.value}</b> · {state.init.label}
+                    </small>
+                  ) : (
+                    <small>{combat.active ? "¡Combate iniciado! Tira ahora" : "Sin tirar"}</small>
+                  )}
+                </button>
+              )}
               {menu === "dice" && (
                 <DiceSettings
                   style={diceStyle}
@@ -697,6 +715,7 @@ export function App() {
                 <InitPanel
                   character={character}
                   state={state}
+                  scout={scoutBonus(states)}
                   onRoll={(opt, winsTies) => rollInit(character, opt, winsTies)}
                   onClose={() => setMenu(null)}
                 />

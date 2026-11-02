@@ -8,6 +8,7 @@ import type { Combat, Entry } from "../combat";
 import { ConditionRow, CondIcon } from "./bits";
 import { InitPanel, type InitOption } from "./Initiative";
 import type { CombatActions } from "./useCombatActions";
+import { scoutBonus } from "../explore";
 
 interface Props {
   combat: Combat;
@@ -129,7 +130,7 @@ export function CombatView({ combat, entries, isGm, own, ownState, npcStates, al
         )}
       </header>
 
-      {own && <InitPanel character={own} state={ownState} onRoll={onRollInit} inline />}
+      {own && <InitPanel character={own} state={ownState} scout={scoutBonus(allPcs)} onRoll={onRollInit} inline />}
 
       {showList && (
         <div className="init-list">

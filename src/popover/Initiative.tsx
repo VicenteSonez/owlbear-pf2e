@@ -3,6 +3,7 @@ import { fmtMod, type Character } from "../pathbuilder";
 import type { PcState } from "../live";
 import { checkAdjust, modsText, type RollCtx } from "../rules";
 import { store } from "../storage";
+import { hasAct } from "../explore";
 
 export interface InitOption {
   key: string;
@@ -24,25 +25,33 @@ export function initOptions(c: Character): InitOption[] {
   ];
 }
 
-// Fórmula de iniciativa con las condiciones que la afectan (Asustado, Enfermo…)
-export function initFormula(opt: InitOption, state?: PcState) {
+// Fórmula de iniciativa con las condiciones que la afectan (Asustado, Enfermo…) y el bono
+// de Atento de quien vigile en exploración
+export function initFormula(opt: InitOption, state?: PcState, scout = 0) {
   const a = checkAdjust(state?.cond, opt.ctx);
-  return { formula: `1d20${fmtMod(opt.base + a.total)}`, notes: modsText(a.applied) || undefined, value: opt.base + a.total };
+  const notes = [modsText(a.applied), scout ? `Atento +${scout}` : ""].filter(Boolean).join(", ");
+  const value = opt.base + a.total + scout;
+  return { formula: `1d20${fmtMod(value)}`, notes: notes || undefined, value };
 }
 
 interface Props {
   character: Character;
   state?: PcState;
+  // Bono de Atento del grupo
+  scout?: number;
   onRoll: (opt: InitOption, winsTies: boolean) => void;
   onClose?: () => void;
   inline?: boolean;
 }
 
-export function InitPanel({ character: c, state, onRoll, onClose, inline }: Props) {
+export function InitPanel({ character: c, state, scout = 0, onRoll, onClose, inline }: Props) {
   const [pref, setPref] = useState(() => store.initPref(c.id));
+  // Con Pasar desapercibido la iniciativa es Sigilo, salvo que el jugador elija otra aquí
+  const [picked, setPicked] = useState(false);
   const options = initOptions(c);
-  const opt = options.find((o) => o.key === pref.skill) ?? options[0];
-  const f = initFormula(opt, state);
+  const skill = hasAct(state, "avoid") && !picked ? "stealth" : pref.skill;
+  const opt = options.find((o) => o.key === skill) ?? options[0];
+  const f = initFormula(opt, state, scout);
   const update = (p: Partial<typeof pref>) => {
     const next = { ...pref, ...p };
     setPref(next);
@@ -64,7 +73,14 @@ export function InitPanel({ character: c, state, onRoll, onClose, inline }: Prop
         )}
       </div>
       <div className="init-row">
-        <select value={opt.key} onChange={(e) => update({ skill: e.target.value })} title="Habilidad para la iniciativa">
+        <select
+          value={opt.key}
+          onChange={(e) => {
+            setPicked(true);
+            update({ skill: e.target.value });
+          }}
+          title="Habilidad para la iniciativa"
+        >
           {options.map((o) => (
             <option key={o.key} value={o.key}>
               {o.label} {fmtMod(o.base)}
@@ -83,9 +99,15 @@ export function InitPanel({ character: c, state, onRoll, onClose, inline }: Prop
             onClose?.();
           }}
         >
-          Tirar <b className={f.value < opt.base ? "down" : ""}>{fmtMod(f.value)}</b>
+          Tirar <b className={f.value < opt.base ? "down" : f.value > opt.base ? "up" : ""}>{fmtMod(f.value)}</b>
         </button>
       </div>
+      {(scout > 0 || (hasAct(state, "avoid") && opt.key === "stealth")) && (
+        <div className="init-hints muted small">
+          {scout > 0 && <span>👁 Atento: +{scout} circunstancial</span>}
+          {hasAct(state, "avoid") && opt.key === "stealth" && <span>👣 Pasar desapercibido: Sigilo como iniciativa</span>}
+        </div>
+      )}
     </div>
   );
 }

@@ -2,8 +2,10 @@ import { useMemo, useRef } from "react";
 import OBR from "@owlbear-rodeo/sdk";
 import { fmtMod } from "../pathbuilder";
 import { live } from "../live";
-import { inOwlbear, tokenData } from "../obr";
-import { CHANNEL_FX, newId } from "../shared";
+import { inOwlbear, patchNpc, tokenData } from "../obr";
+import { FLANK_ID, isFlanked, setFlank, shieldBroken, type Conditions } from "../rules";
+import { avoidNotice, hasAct, type Observer } from "../explore";
+import { CHANNEL_FX, newId, npcLabel, npcState } from "../shared";
 import { store } from "../storage";
 import { autoRoll, type Roller } from "../autoRoll";
 import { EMPTY_COMBAT, combatStore, moveTarget, stepTurn, type Combat, type Entry, type NpcCombatant } from "../combat";
@@ -60,7 +62,46 @@ export function useCombatActions(combat: Combat, entries: Entry[], who: Roller, 
       return (await addNpcs(npcs)) + include.length;
     };
 
+    // Pasar desapercibido: quien tiró Sigilo como iniciativa queda Escondido de los PNJ del combate
+    // cuya CD de Percepción (10 + Percepción) iguale o supere. Devuelve cuántos PJ revisó.
+    const applyAvoidNotice = async () => {
+      const { combat, who, publish } = ref.current;
+      const sneaks = Object.values(live.all()).filter((s) => !s.pet && s.init?.skill === "stealth" && !combat.excluded.includes(s.id));
+      // Escondido se lleva por token: los PNJ sin token no cuentan
+      const withToken = combat.npcs.filter((n) => n.tokenId);
+      if (!sneaks.length || !withToken.length) return 0;
+      const items = inOwlbear ? await OBR.scene.items.getItems(withToken.map((n) => n.tokenId!)) : [];
+      const observers: Observer[] = withToken.map((n) => {
+        const item = items.find((i) => i.id === n.tokenId);
+        const d = item && tokenData(item);
+        const npc = d?.kind === "npc" ? npcState(d) : undefined;
+        return { key: `npc:${n.tokenId}`, name: npc ? npcLabel(npc) : n.name, dc: 10 + (npc?.per ?? n.mod) };
+      });
+      const list = (os: Observer[]) => os.map((o) => `${o.name} (CD ${o.dc})`).join(", ");
+      for (const s of sneaks) {
+        const r = avoidNotice(s.init!.value, observers);
+        if (r.from.length) await live.patch(s.id, (x) => ({ ...x, cond: { ...x.cond, hidden: true, hidFrom: r.from.map((o) => o.key) } }));
+        await publish({
+          id: newId(),
+          time: Date.now(),
+          ...who,
+          charName: s.name,
+          label: `Pasar desapercibido · Sigilo ${s.init!.value}`,
+          title: r.from.length ? "Escondido" : "Detectado",
+          formula: "",
+          detail: [r.from.length ? `Escondido de ${list(r.from)}` : "", r.seen.length ? `Lo ven ${list(r.seen)}` : ""].filter(Boolean).join(" · "),
+          total: NaN,
+          kind: "note",
+          secret: true,
+          tag: "Exploración",
+        });
+      }
+      return sneaks.length;
+    };
+
     return {
+      applyAvoidNotice,
+
       async start() {
         await combatStore.patch((c) => ({ ...c, active: true, round: 0, current: null }));
         // Furia al iniciar el combate (casilla del bárbaro)
@@ -73,23 +114,34 @@ export function useCombatActions(combat: Combat, entries: Entry[], who: Roller, 
           const fx: RollFx = { kind: "rage", from: `pc:${s.id}` };
           if (inOwlbear) OBR.broadcast.sendMessage(CHANNEL_FX, fx, { destination: "ALL" }).catch(() => undefined);
         }
+        // Alzar escudo (exploración): parte con el escudo alzado; baja al empezar su turno
+        for (const s of Object.values(live.all())) {
+          if (!hasAct(s, "defend") || !s.shield || s.shield.raised || shieldBroken(s.shield)) continue;
+          await live.patch(s.id, (x) => (x.shield ? { ...x, shield: { ...x.shield, raised: true } } : x));
+        }
       },
 
       async end() {
-        // Lo que dura "hasta el fin del combate" o por rondas se apaga
+        // Lo que dura "hasta el fin del combate" o por rondas se apaga, y el flanqueo también
+        // (depende de la posición en el combate)
+        const lasting = (c: Conditions) => (c.buffs ?? []).filter((b) => !b.until && b.id !== FLANK_ID);
         for (const s of Object.values(live.all())) {
-          const buffs = (s.cond.buffs ?? []).filter((b) => !b.until);
+          const buffs = lasting(s.cond);
           const k = s.cls ?? {};
           const clsChanged = k.rage || k.psyche || k.boost || k.taunt || k.strat || k.traced || k.odCd || k.castR !== undefined || k.stupR;
           if (!s.init && !clsChanged && buffs.length === (s.cond.buffs ?? []).length) continue;
           await live.patch(s.id, (x) => ({
             ...x,
             init: undefined,
-            cond: { ...x.cond, buffs: (x.cond.buffs ?? []).filter((b) => !b.until).length ? (x.cond.buffs ?? []).filter((b) => !b.until) : undefined },
+            cond: { ...x.cond, buffs: lasting(x.cond).length ? lasting(x.cond) : undefined },
             cls: x.cls
               ? { ...x.cls, rage: undefined, psyche: undefined, boost: undefined, taunt: undefined, strat: undefined, traced: undefined, odCd: undefined, castR: undefined, stupR: undefined }
               : undefined,
           }));
+        }
+        if (inOwlbear && (await OBR.scene.isReady())) {
+          const flanked = await OBR.scene.items.getItems((i) => isFlanked(tokenData(i)?.cond));
+          for (const i of flanked) await patchNpc(i.id, (n) => ({ ...n, cond: setFlank(n.cond, false) }));
         }
         await combatStore.write({ ...EMPTY_COMBAT, excluded: ref.current.combat.excluded });
       },
@@ -102,6 +154,8 @@ export function useCombatActions(combat: Combat, entries: Entry[], who: Roller, 
           const { combat, entries, who, publish } = ref.current;
           const s = stepTurn(entries, combat, dir);
           if (dir === 1 && s.from) await endOfTurn(s.from, who, publish, combat.round);
+          // Primer turno: ya están todas las iniciativas, se resuelve Pasar desapercibido
+          if (dir === 1 && !combat.current) await applyAvoidNotice();
           await combatStore.patch((c) => ({ ...c, active: true, current: s.current, round: s.round }));
           if (dir === 1 && s.to) await startOfTurn(s.to, who, publish);
         } finally {

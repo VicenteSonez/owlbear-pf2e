@@ -10,6 +10,7 @@ import { inOwlbear, saveRoom, whenReady } from "./obr";
 import { effectiveMaxHp, type Conditions, type Iwr, type PersAid, type ShieldState, type Vitals } from "./rules";
 import type { InitRoll } from "./combat";
 import { sheetPerks, type ClassState } from "./classes";
+import type { ExploreState } from "./explore";
 
 export const META_PC_PREFIX = `${ID}/pc/`;
 const LOCAL_KEY = "pf2.live.local";
@@ -49,6 +50,8 @@ export interface PcState extends Vitals {
   perks?: string[];
   // Asistencia y mejoras contra el daño persistente
   aid?: PersAid;
+  // Actividades de exploración elegidas
+  explore?: ExploreState;
   t: number;
 }
 

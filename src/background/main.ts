@@ -1,5 +1,5 @@
 import OBR, { buildImage, buildShape, buildText, type Item } from "@owlbear-rodeo/sdk";
-import { autoLinkCandidate, linkToken, npcToToken, publishPlayer, roomId, tokenData, whenReady } from "../obr";
+import { autoLinkCandidate, linkToken, npcToToken, patchNpc, publishPlayer, roomId, tokenData, whenReady } from "../obr";
 import { store } from "../storage";
 import { extrasStore } from "../extras";
 import { watchForUpdates } from "../autoUpdate";
@@ -8,7 +8,7 @@ import { combatStore, npcKey, pcKey, type Combat } from "../combat";
 import { playAttack, playAttackTo, playOnToken, resetFx } from "./fx";
 import type { FxKind, RollFx } from "../fx";
 import type { PcState } from "../live";
-import { activeConditionIcons, deathAt, effectiveAc, effectiveMaxHp, hiddenFrom } from "../rules";
+import { activeConditionIcons, deathAt, effectiveAc, effectiveMaxHp, hiddenFrom, isFlanked, setFlank } from "../rules";
 import {
   CHANNEL_FX,
   CHANNEL_ROLL,
@@ -20,6 +20,7 @@ import {
   TOAST_WIDTH,
   hpColor,
   hpDescriptor,
+  npcLabel,
   npcPlayerView,
   toastCardHeight,
   npcState,
@@ -104,6 +105,38 @@ async function setupContextMenus() {
     embed: { url: embedUrl, height: 164 },
   });
 
+  // Flanqueo: pone o quita Desprevenido (Flanqueo) a los tokens elegidos, PJ o PNJ
+  await OBR.contextMenu.create({
+    id: `${ID}/flank`,
+    icons: [
+      {
+        icon: icon("cond/off-guard"),
+        label: "Flanqueo (Desprevenido)",
+        filter: { every: [{ key: ["metadata", META_TOKEN], value: undefined, operator: "!=" }] },
+      },
+    ],
+    async onClick(context) {
+      const toks = context.items.map((item) => ({ item, d: tokenData(item) })).filter((t) => t.d);
+      if (!toks.length) return;
+      // Todos quedan igual que lo contrario del primero
+      const condOf = (d: TokenData) => (d.kind === "pc" ? (d.characterId ? live.get(d.characterId)?.cond : undefined) : npcState(d).cond);
+      const on = !isFlanked(condOf(toks[0].d!));
+      const npcIds: string[] = [];
+      for (const { item, d } of toks) {
+        if (d!.kind === "pc") {
+          if (d!.characterId) await live.patch(d!.characterId, (s) => ({ ...s, cond: setFlank(s.cond, on) }));
+        } else npcIds.push(item.id);
+      }
+      // Los jugadores no escriben los tokens de PNJ: se lo piden al GM
+      if (npcIds.length) {
+        if (role === "GM") await applyFlank(npcIds, on);
+        else await OBR.broadcast.sendMessage(CHANNEL_FLANK, { ids: npcIds, on }, { destination: "REMOTE" });
+      }
+      const names = toks.map((t) => (t.d!.kind === "npc" ? npcLabel(npcState(t.d!)) : t.item.name)).join(", ");
+      OBR.notification.show(on ? `${names}: Desprevenido (Flanqueo).` : `${names}: ya no está flanqueado.`, "INFO");
+    },
+  });
+
   // El GM puede ponerle HP/CA a un token sin hoja (enemigos, PNJ)
   await OBR.contextMenu.create({
     id: `${ID}/npc`,
@@ -128,6 +161,21 @@ async function setupContextMenus() {
         for (const d of drafts) d.metadata[META_TOKEN] = data;
       });
     },
+  });
+}
+
+const CHANNEL_FLANK = `${ID}/flank`;
+
+async function applyFlank(ids: string[], on: boolean) {
+  for (const id of ids) await patchNpc(id, (n) => ({ ...n, cond: setFlank(n.cond, on) }));
+}
+
+// Pedidos de flanqueo de los jugadores sobre PNJ (solo los aplica el GM)
+function setupFlank() {
+  OBR.broadcast.onMessage(CHANNEL_FLANK, (event) => {
+    if (role !== "GM") return;
+    const { ids, on } = event.data as { ids: string[]; on: boolean };
+    applyFlank(ids, on).catch((err) => console.error("[PF2e] No se pudo aplicar el flanqueo", err));
   });
 }
 
@@ -1015,6 +1063,7 @@ whenReady().then(async (ok) => {
   meName = await OBR.player.getName();
   await setupContextMenus();
   setupRolls();
+  setupFlank();
   await live.start();
   setupOverlays();
   publishActive();

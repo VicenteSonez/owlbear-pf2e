@@ -631,3 +631,10 @@ export const withoutBuff = (c: Conditions, id: string): Conditions => {
   const keep = (c.buffs ?? []).filter((x) => x.id !== id);
   return { ...c, buffs: keep.length ? keep : undefined };
 };
+
+// Desprevenido por flanqueo: se pone y se quita desde el menú contextual del token y se
+// borra al terminar el combate
+export const FLANK_ID = "flank";
+export const FLANK_BUFF: Buff = { id: FLANK_ID, n: "Desprevenido (Flanqueo)", ty: "circumstance", ac: -2, icon: "off-guard" };
+export const isFlanked = (c: Conditions | undefined) => !!c?.buffs?.some((b) => b.id === FLANK_ID);
+export const setFlank = (c: Conditions, on: boolean): Conditions => (on ? withBuff(c, FLANK_BUFF) : withoutBuff(c, FLANK_ID));
